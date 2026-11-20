@@ -42,7 +42,7 @@ Run these from the repository root in PowerShell. Stop the backend before reset,
    ./.venv/Scripts/python.exe -m backend.app reset-demo --confirm
    ```
 
-3. **Run.** Start the backend and frontend as above. Generate briefings, open the evidence view, and retry audio if it is unavailable.
+3. **Run.** Start the backend and frontend as above. Generate briefings, open the evidence view, and retry audio if it is unavailable. The app remembers facts a listener heard in the last seven days, and the fixture has only ten stories. After about three briefings in one browser, repeated requests return off-topic filler or "No sourced stories match this profile". Run `reset-demo --confirm` (with the backend stopped) or clear the site's local storage between rehearsals.
 
 4. **Costs.** `./.venv/Scripts/python.exe -m backend.app costs` prints the same report as `GET /api/costs`. Demo mode reports $0 throughout.
 
@@ -108,6 +108,8 @@ Set the actual voice IDs in the named server environment variables. An unavailab
 Use a fresh event data directory for a clean measurement because the cost view accumulates calls, including retries. The 10x preparation projection assumes the same article mix, model routing, and unit rates. It does not multiply the cost of one listener's briefing. Missing rates leave the USD estimate unavailable.
 
 ## Scheduled delivery
+
+The schedule form is hidden by default because the n8n workflows are inactive and no production service is configured. To show it for development, build the frontend with `VITE_SHOW_SCHEDULE=1` (for example `$env:VITE_SHOW_SCHEDULE = "1"; npm run build`). The API and the local demo timer are unaffected.
 
 Listener settings save one daily or weekly delivery time in the browser's selected IANA timezone. Each browser stores its own listener ID. Scheduled briefings appear at the delivery time with their cited sources. Story ratings and recent spoken facts are stored separately for each listener. The output language and article region are independent. To enable region filters for an imported corpus, supply explicit `region` or `country` metadata and reimport existing records as needed.
 

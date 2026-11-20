@@ -48,6 +48,8 @@ const newListenerId = () => {
   localStorage.setItem(key, id);
   return id;
 };
+// Scheduled delivery needs the n8n workflows, a public HTTPS backend and durable storage; hide it unless explicitly enabled.
+const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE === '1';
 const defaultTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const defaultScheduleDraft = (): ScheduleDraft => ({ profile_id: '', region: 'all', language: 'en', cadence: 'daily', local_time: '08:00', weekday: 0, timezone: defaultTimezone(), voice_preset: 'default' });
 const toScheduleDraft = (schedule: Schedule): ScheduleDraft => ({ profile_id: schedule.profile_id, region: schedule.region, language: schedule.language, cadence: schedule.cadence, local_time: schedule.local_time, weekday: schedule.weekday, timezone: schedule.timezone, voice_preset: schedule.voice_preset });
@@ -385,7 +387,7 @@ export default function App() {
             <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>
             <label>Voice preset<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value }))}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
           </div>
-          <details className="schedule-settings">
+          {SHOW_SCHEDULE && <details className="schedule-settings">
             <summary><span><Clock3 size={15}/>Schedule delivery</span><ChevronDown size={15}/></summary>
             <div className="schedule-fields">
               <label>Profile<select value={scheduleDraft.profile_id || profileId} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, profile_id: e.target.value }))}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
@@ -398,7 +400,7 @@ export default function App() {
               {scheduleMessage && <p className="schedule-message" role="status">{scheduleMessage}</p>}
               {schedule && <><p className={/fail|error|unavailable/i.test(schedule.dispatch_status) ? 'schedule-message schedule-failed' : 'schedule-message'} role="status">Scheduler status: {schedule.dispatch_status.replace(/_/g, ' ')}</p><p className="next-delivery">Next delivery {new Date(schedule.delivery_at).toLocaleString([], { timeZone: schedule.timezone, dateStyle: 'medium', timeStyle: 'short' })} ({schedule.timezone})</p></>}
             </div>
-          </details>
+          </details>}
           <button className="primary-button" onClick={makeBriefing} disabled={Boolean(action) || preferencesLoading || !canGenerate}>
             {action === 'briefing' ? <><LoaderCircle className="spin" size={17}/> Preparing your briefing</> : <><Sparkles size={16}/> Create my briefing <span className="button-arrow" aria-hidden="true">→</span></>}
           </button>
@@ -588,7 +590,7 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
             {currentStory ?
               <h3 className="evidence-title"><strong>{item.title}</strong></h3> :
               <button className="evidence-title" onClick={() => setOpen(expanded ? null : item.id)} aria-expanded={expanded}>
-                <span><span className="evidence-count">{item.articles.length} SOURCES</span><strong>{item.title}</strong></span>
+                <span><span className="evidence-count">{item.articles.length} {item.articles.length === 1 ? 'SOURCE' : 'SOURCES'}</span><strong>{item.title}</strong></span>
                 <ChevronDown size={17} className={expanded ? 'rotated' : ''}/>
               </button>}
             {expanded && <div className="evidence-detail">
