@@ -330,6 +330,35 @@ def _value_unit(value: str, unit: str = "", language: str = "en") -> tuple[str, 
     return _canonical_number(value_text, language), _canonical_unit(unit or embedded_unit)
 
 
+def _locate_evidence(body: str, evidence: str, value: str) -> tuple[int, str]:
+    """Find a model's quote in the article and return (offset, the article's own text), or (-1, "").
+
+    Models often capitalise the first word or re-punctuate and paraphrase the tail of a quote.
+    Match case-insensitively and trim the tail word by word, never past the quoted figure, then
+    return an equally long span of the article itself, so stored evidence is always exact source text.
+    """
+    evidence = evidence.strip()
+    if not body or not evidence:
+        return -1, ""
+    at = body.find(evidence)
+    if at >= 0:
+        return at, evidence
+    number = _NUMBER.search(str(value).lstrip("-−"))
+    figure_end = evidence.find(number.group(0)) + len(number.group(0)) if number and number.group(0) in evidence else -1
+    if figure_end < 0:
+        return -1, ""
+    lowered = body.lower()
+    candidate = evidence.rstrip(".,;:!? ")
+    while len(candidate) >= max(figure_end, 24):
+        at = lowered.find(candidate.lower())
+        if at >= 0:
+            return at, body[at:at + len(evidence)]
+        if " " not in candidate[figure_end:]:
+            break
+        candidate = candidate.rsplit(" ", 1)[0].rstrip(".,;:!? ")
+    return -1, ""
+
+
 def _fact_id(article_id: str, evidence: str, value: str, unit: str = "", language: str = "en") -> str:
     canonical = "|".join(_value_unit(value, unit, language))
     return "fact-" + hashlib.sha1(f"{article_id}|{evidence}|{canonical}".encode("utf-8")).hexdigest()[:12]
@@ -524,13 +553,15 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
         facts: list[dict[str, Any]] = []
         for raw in item.get("facts", []):
             aid = str(raw.get("article_id", "")); article = by_id.get(aid)
-            evidence = str(raw.get("evidence", ""))
             body = str(article.get("body", "")) if article else ""
-            evidence_offset = body.find(evidence) if evidence else -1
+            value = str(raw.get("value", "")).strip()
+            evidence_offset, evidence = _locate_evidence(body, str(raw.get("evidence", "")), value)
             if not article or not evidence or evidence_offset < 0:
                 continue
             language = _language(article)
-            value = str(raw.get("value", "")).strip()
+            if value[:1] in "-−" and value not in evidence:
+                # "fell 0.3%" is quoted without a sign; keep the figure as the article prints it.
+                value = value[1:]
             unit = str(raw.get("unit", "")).strip()
             quantity = _value_unit(value, unit, language)
             if not quantity[0]:
