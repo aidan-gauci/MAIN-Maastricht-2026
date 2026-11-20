@@ -1,0 +1,359 @@
+{
+  "name": "Schedule Liquid Briefing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "liquid-briefing-schedule",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "d3811c97-c1bd-4f47-9708-159cc787b31c",
+      "name": "Receive Schedule",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "7c1959cc-5bd5-4e58-bdc0-738f9a3d5f30",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "81a2a23a-2dc3-4c4c-9454-14b14209d137",
+              "name": "schedule_id",
+              "value": "={{ $('Receive Schedule').item.json.body.schedule_id }}",
+              "type": "string"
+            },
+            {
+              "id": "3333a218-6900-413f-ae2c-8aef438045d8",
+              "name": "schedule_version",
+              "value": "={{ $('Receive Schedule').item.json.body.schedule_version }}",
+              "type": "number"
+            },
+            {
+              "id": "d46dc892-23bb-4037-aed2-cc12368e22d8",
+              "name": "generation_at",
+              "value": "={{ $('Receive Schedule').item.json.body.generation_at }}",
+              "type": "string"
+            },
+            {
+              "id": "3b545d1a-4437-4d7d-9016-efddf0ad8a2c",
+              "name": "delivery_at",
+              "value": "={{ $('Receive Schedule').item.json.body.delivery_at }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "2c3d9ea1-bdfa-4c31-bfb4-98ff46468bb3",
+      "name": "Keep Schedule Envelope",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ $('Keep Schedule Envelope').item.json.generation_at }}"
+      },
+      "id": "23981620-9c2e-4260-9185-33975f1fef18",
+      "name": "Wait Until Generation Time",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-PUBLIC-BACKEND.example.com/api/scheduler/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { schedule_id: $('Keep Schedule Envelope').item.json.schedule_id, schedule_version: $('Keep Schedule Envelope').item.json.schedule_version, generation_at: $('Keep Schedule Envelope').item.json.generation_at, delivery_at: $('Keep Schedule Envelope').item.json.delivery_at } }}",
+        "options": {}
+      },
+      "id": "50d38f79-a9cd-4b57-8ae9-8c7d8ad4e412",
+      "name": "Run Scheduled Generation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6ce7e140-1fd8-4c2a-b14c-b3a6f9cf3252",
+              "leftValue": "={{ $('Run Scheduled Generation').item.json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0423ca81-3e27-44f0-99d0-cdc51f69ed4e",
+      "name": "Did Generation Fail",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-PUBLIC-BACKEND.example.com/api/scheduler/fail",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { schedule_id: $('Keep Schedule Envelope').item.json.schedule_id, schedule_version: $('Keep Schedule Envelope').item.json.schedule_version, generation_at: $('Keep Schedule Envelope').item.json.generation_at, delivery_at: $('Keep Schedule Envelope').item.json.delivery_at } }}",
+        "options": {}
+      },
+      "id": "f4cc227a-9be3-4ea1-ae68-b2fa0d8bf188",
+      "name": "Record Terminal Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 120],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ad525ad8-8b78-4f15-9ddf-c409e5f52d89",
+              "leftValue": "={{ $json.next?.schedule_id ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "42b8a178-3732-42cb-8b28-c76545cc5afd",
+      "name": "Has Next After Failure",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1560, 120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Record Terminal Failure').item.json.next }}",
+        "options": {}
+      },
+      "id": "5ca8e1eb-e8e1-4bcf-8a79-874e1805f22c",
+      "name": "Schedule Next After Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 80],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "68a57b93-6488-48d7-a2dd-ae18ff8464af",
+              "leftValue": "={{ $json.next?.schedule_id ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fd795335-c53a-4758-9f85-a78b8aab82ad",
+      "name": "Has Next After Run",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Run Scheduled Generation').item.json.next }}",
+        "options": {}
+      },
+      "id": "46e7680c-5386-4497-87f3-0bbe7460a00b",
+      "name": "Schedule Next After Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 280],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{
+            "id": "3105eabb-ff84-44a0-8806-a773f78b0857",
+            "leftValue": "={{ $('Record Terminal Failure').item.json.status }}",
+            "rightValue": "failed",
+            "operator": { "type": "string", "operation": "equals" }
+          }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ce97d2e7-b170-446b-a3fa-8de1420dbead",
+      "name": "Was Failure Recorded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2000, 120]
+    },
+    {
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Liquid Briefing recorded a terminal generation failure."
+      },
+      "id": "4e169ae0-35e6-4bb2-ab21-c09773e11aa1",
+      "name": "Report Terminal Failure",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [2220, 120]
+    }
+  ],
+  "connections": {
+    "Receive Schedule": {
+      "main": [[{ "node": "Keep Schedule Envelope", "type": "main", "index": 0 }]]
+    },
+    "Keep Schedule Envelope": {
+      "main": [[{ "node": "Wait Until Generation Time", "type": "main", "index": 0 }]]
+    },
+    "Wait Until Generation Time": {
+      "main": [[{ "node": "Run Scheduled Generation", "type": "main", "index": 0 }]]
+    },
+    "Run Scheduled Generation": {
+      "main": [
+        [{ "node": "Did Generation Fail", "type": "main", "index": 0 }],
+        [{ "node": "Record Terminal Failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Did Generation Fail": {
+      "main": [
+        [{ "node": "Record Terminal Failure", "type": "main", "index": 0 }],
+        [{ "node": "Has Next After Run", "type": "main", "index": 0 }]
+      ]
+    },
+    "Record Terminal Failure": {
+      "main": [[{ "node": "Has Next After Failure", "type": "main", "index": 0 }]]
+    },
+    "Has Next After Failure": {
+      "main": [
+        [{ "node": "Schedule Next After Failure", "type": "main", "index": 0 }],
+        [{ "node": "Was Failure Recorded", "type": "main", "index": 0 }]
+      ]
+    },
+    "Schedule Next After Failure": {
+      "main": [[{ "node": "Was Failure Recorded", "type": "main", "index": 0 }]]
+    },
+    "Was Failure Recorded": {
+      "main": [[{ "node": "Report Terminal Failure", "type": "main", "index": 0 }], []]
+    },
+    "Has Next After Run": {
+      "main": [[{ "node": "Schedule Next After Run", "type": "main", "index": 0 }], []]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false
+  },
+  "versionId": "cf25a01b-0279-44d0-964e-f09e753fb48b",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

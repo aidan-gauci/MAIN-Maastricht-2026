@@ -1,0 +1,183 @@
+{
+  "name": "Record Liquid Briefing Failures",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e48efc4d-515d-4a7a-9d0c-a0a53f85a0c3",
+      "name": "Catch Scheduler Failure",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{
+            "id": "99c47fe9-e10e-4380-83b8-9184f565791a",
+            "leftValue": "={{ $json.execution?.id != null && $json.execution?.lastNodeExecuted !== 'Report Terminal Failure' }}",
+            "rightValue": "",
+            "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+          }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e574bacf-d144-4673-8e0f-16452c4effd0",
+      "name": "Has Unhandled Execution Failure",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://YOUR-N8N-INSTANCE.app.n8n.cloud/api/v1/executions/' + $('Catch Scheduler Failure').item.json.execution.id + '?includeData=true' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a3e05b47-1a19-47d6-aae0-008089024ca2",
+      "name": "Load Failed Execution Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "n8n API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const execution = $input.first().json;\nconst runData = execution.data?.resultData?.runData;\n\nif (!runData || typeof runData !== 'object') {\n  throw new Error('Failed execution data is unavailable. Enable saved error execution data in n8n.');\n}\n\nfor (const runs of Object.values(runData)) {\n  for (const run of Array.isArray(runs) ? runs : []) {\n    for (const output of run.data?.main ?? []) {\n      for (const item of output ?? []) {\n        const envelope = item.json?.body;\n        if (\n          typeof envelope?.schedule_id === 'string' &&\n          Number.isInteger(envelope.schedule_version) &&\n          typeof envelope.generation_at === 'string' &&\n          typeof envelope.delivery_at === 'string'\n        ) {\n          return [{ json: {\n            schedule_id: envelope.schedule_id,\n            schedule_version: envelope.schedule_version,\n            generation_at: envelope.generation_at,\n            delivery_at: envelope.delivery_at\n          } }];\n        }\n      }\n    }\n  }\n}\n\nthrow new Error('The failed execution did not contain a schedule envelope.');"
+      },
+      "id": "dcd66347-3847-43fd-9438-01dca4c75eb9",
+      "name": "Extract Schedule Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-PUBLIC-BACKEND.example.com/api/scheduler/fail",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "aecbf627-c211-415c-9ca2-475aee984585",
+      "name": "Record Unhandled Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "181ff3a8-3255-4f08-b10d-8ed55ca8ce05",
+              "leftValue": "={{ $json.next?.schedule_id ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "885636c8-0843-4e50-98ae-c3ad2cb4080a",
+      "name": "Has Next After Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1420, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Record Unhandled Failure').item.json.next }}",
+        "options": {}
+      },
+      "id": "962fbb08-4c2c-414f-a3c6-1a20eb72c29b",
+      "name": "Schedule Next After Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 260],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "Liquid Briefing Shared Secret"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Catch Scheduler Failure": {
+      "main": [[{ "node": "Has Unhandled Execution Failure", "type": "main", "index": 0 }]]
+    },
+    "Has Unhandled Execution Failure": {
+      "main": [[{ "node": "Load Failed Execution Data", "type": "main", "index": 0 }], []]
+    },
+    "Load Failed Execution Data": {
+      "main": [[{ "node": "Extract Schedule Envelope", "type": "main", "index": 0 }]]
+    },
+    "Extract Schedule Envelope": {
+      "main": [[{ "node": "Record Unhandled Failure", "type": "main", "index": 0 }]]
+    },
+    "Record Unhandled Failure": {
+      "main": [[{ "node": "Has Next After Error", "type": "main", "index": 0 }]]
+    },
+    "Has Next After Error": {
+      "main": [[{ "node": "Schedule Next After Error", "type": "main", "index": 0 }], []]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false
+  },
+  "versionId": "b6ecf139-43d2-4765-9b9a-83702d7fe1b4",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

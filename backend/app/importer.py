@@ -43,6 +43,8 @@ def read_articles(path: Path, *, official=False, limit=None):
                         body=row.get("text_content") or row.get("excerpt"),
                         url=row.get("permalink"),
                         tickers=row.get("company_tickers") or [],
+                        region=row.get("region"),
+                        country=row.get("country"),
                     )
                 for key in ("title", "body", "source"):
                     if isinstance(row.get(key), str):

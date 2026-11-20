@@ -7,8 +7,9 @@ from uuid import uuid4
 
 def offline_voice(text, path):
     if binary := (shutil.which("espeak-ng") or shutil.which("espeak")):
-        command = [binary, "-v", "en", "-w", str(path), "--stdin"]
+        command = [binary, "-v", "en", "-w", path.name, "--stdin"]
         env = None
+        working_dir = path.parent
     elif os.name == "nt":
         command = [
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
@@ -18,9 +19,11 @@ def offline_voice(text, path):
             "$voice.Speak([Console]::In.ReadToEnd()); $voice.Dispose()",
         ]
         env = {**os.environ, "LIQUID_VOICE_OUTPUT": str(path)}
+        working_dir = None
     else:
         raise RuntimeError("Install eSpeak NG for offline narration")
-    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=90)
+    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=90,
+                   cwd=working_dir)
 
 
 def create_audio(briefing, store, providers, mode):
@@ -32,6 +35,7 @@ def create_audio(briefing, store, providers, mode):
         if mode == "live":
             providers.synthesize(text, temporary, briefing["language"])
         else:
+            target.parent.mkdir(parents=True, exist_ok=True)
             offline_voice(text, temporary)
             store.record_usage("speech_generation", mode="demo", characters=len(text), estimated_usd=0)
         if not temporary.is_file() or temporary.stat().st_size <= 44:
