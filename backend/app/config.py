@@ -101,7 +101,8 @@ class BriefingRequest(BaseModel):
     region: str = "all"
     voice_preset: str = "default"
     # Applied when this briefing's audio is generated; existing audio is never re-rendered for it.
-    expressiveness: Literal["calm", "balanced", "expressive"] = "expressive"
+    # Shown to listeners as Steady, Default and Expressive.
+    expressiveness: Literal["calm", "balanced", "expressive"] = "balanced"
 
     @field_validator("region")
     @classmethod

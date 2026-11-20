@@ -192,7 +192,7 @@ def recommendation_topics(store):
 
 def generate_briefing(store, profile, *, listener_id=None, region="all", voice_preset="default",
                       spoken_fact_ids=None, feedback_events=None, briefing_id=None,
-                      available_at=None, persist=True, scheduled=False, expressiveness="expressive"):
+                      available_at=None, persist=True, scheduled=False, expressiveness="balanced"):
     profile = deepcopy(profile)
     profile["region"] = region
     ranking, summaries, _, has_stories = store.recommendation_snapshot(_build_recommendations)
