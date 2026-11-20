@@ -8,8 +8,9 @@ import re
 import unicodedata
 from collections import Counter
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from .clustering import group_articles
 
@@ -41,14 +42,25 @@ def _group_key(article: dict[str, Any]) -> str:
     # route. Canonicalize that route instead of merging every item from a
     # publisher on the same date, which can combine unrelated coverage.
     parsed = urlsplit(str(article.get("url", "")))
-    if parsed.netloc and parsed.path:
-        parts = [part for part in parsed.path.split("/") if part]
-        if parts and parts[0].lower() in {"en", "de", "nl"}:
-            parts.pop(0)
-        route = "/".join(parts).casefold()
-        if route:
-            return f"url|{parsed.netloc.casefold()}|{route}"
-    return _norm(str(article.get("title", ""))) + "|" + _day(article)
+    parts = [part for part in parsed.path.split("/") if part]
+    if parts and parts[0].lower() in {"en", "de", "nl"}:
+        parts.pop(0)
+    route = "/".join(parts)
+    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+             if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid"}]
+    # Some feeds use a shared landing page or query-based article IDs.
+    if parsed.netloc and (query or route.casefold() not in {"", "news", "latest", "index.html"}):
+        return f"url|{parsed.netloc.casefold()}|{route}?{urlencode(query)}"
+    return f"article|{article['article_id']}"
+
+
+# These phrases identify a measure more precisely than isolated financial words.
+_MEASURES = {
+    "operating profit": r"operating profit|operatives ergebnis|betriebsgewinn|gewinn aus dem betrieb|operationele winst|bedrijfswinst",
+    "policy rate": r"policy rate|leitzins|beleidsrente",
+    "inflation": r"inflation|inflatie|teuerung",
+}
+_MEASURE_PATTERNS = {name: re.compile(rf"\b(?:{terms})\b", re.I) for name, terms in _MEASURES.items()}
 
 
 def _topic_family(context: str) -> str:
@@ -60,72 +72,65 @@ def _topic_family(context: str) -> str:
     return words[0] if words else "figure"
 
 
+# Match whole words and explicit inflections so "reports" is not a port story
+# and Dutch "rente" does not imply housing.
 _TOPIC_TERMS = {
-    "growth": ("growth", "forecast", "wachstum", "prognose", "groei", "verwachting"),
-    "trade": ("export", "trade", "handel", "exports"),
-    "rates": ("rate", "rente", "leitzins", "interest", "basis point", "basispunkt"),
-    "inflation": ("inflation", "prices", "preise", "prijzen", "price"),
-    "jobs": ("jobs", "workers", "arbeitsplatz", "banen", "wage", "lohn", "loon", "dockworkers"),
-    "energy": ("energy", "solar", "megawatt", "electricity", "energie"),
-    "housing": ("housing", "rent", "home", "household", "haushalt", "huishouden"),
-    "industry": ("factory", "manufactur", "industry", "industrie", "grant", "equipment"),
-    "tourism": ("tourism", "tourismus", "toerisme", "visitor", "receipts", "stays", "nächtigungen"),
-    "agriculture": ("farm", "agriculture", "fertilizer", "feed", "landwirtschaft"),
-    "credit": ("loan", "credit", "lender", "kredit", "krediet", "payment", "overdue"),
-    "transport": ("rail", "freight", "port", "harbor", "hafen", "haven", "border"),
-    "markets": ("market", "bank", "auction", "investment", "exports", "trade"),
+    "growth": r"growth|forecasts?|wachstum(?:sprognose)?|prognose|groei(?:verwachting)?",
+    "trade": r"exports?|exporters?|exporte|trade|handel",
+    "rates": r"rates?|rente|beleidsrente|leitzins|interest rates?|basis points?|basispunkte?n?|basispunten",
+    "inflation": r"inflation|inflatie|prices?|preise|prijzen",
+    "jobs": r"jobs?|workers?|arbeitsplatz|arbeitsplätze|banen|wages?|lohn|loon|dockworkers?|employment",
+    "energy": r"energy|solar|megawatts?|electricity|energie",
+    "housing": r"housing|rents?|rentals?|homes?|households?|haushalte?|huishoudens?",
+    "industry": r"factor(?:y|ies)|manufactur(?:e|er|ers|ing)|industry|industrie|grants?|equipment",
+    "tourism": r"tourism|tourismus|toerisme|visitors?|receipts|stays|nächtigungen",
+    "agriculture": r"farms?|farmers?|farming|agriculture|fertilizers?|feed|landwirtschaft",
+    "credit": r"loans?|credit|lenders?|kredite?|krediet|payments?|overdue",
+    "transport": r"rail|freight|ports?|harbou?rs?|hafen|haven|borders?",
+    "markets": r"markets?|banks?|auction|investments?|exports?|trade",
+    "earnings": r"earnings|profits?|revenue|winst|gewinn|umsatz|omzet|quartalsumsatz|kwartaalomzet",
+    "technology": r"technology|technologie|software|semiconductors?",
 }
-
-
-_TOPIC_ALIASES = {"rate": "rates", "interest rates": "rates", "trade and exports": "trade", "prices": "inflation", "employment": "jobs", "transportation": "transport"}
+_TOPIC_PATTERNS = {topic: re.compile(rf"\b(?:{terms})\b", re.I) for topic, terms in _TOPIC_TERMS.items()}
+_TOPIC_ALIASES = {"rate": "rates", "interest rate": "rates", "interest rates": "rates", "trade and exports": "trade", "prices": "inflation", "employment": "jobs", "transportation": "transport"}
 
 
 def _topic_key(value: Any) -> str:
-    text = str(value).strip().lower()
+    text = " ".join(str(value).casefold().split())
     return _TOPIC_ALIASES.get(text, text)
 
 
-def _topic_terms(value: str) -> tuple[str, ...]:
-    key = _topic_key(value)
-    terms = _TOPIC_TERMS.get(key)
-    if terms:
-        return terms
-    return tuple(re.findall(r"[a-z0-9]+", key))
+def _has_topic(key: str, labels: set[str]) -> bool:
+    return bool(key) and any(re.search(rf"(?<!\w){re.escape(key)}(?!\w)", label) for label in labels)
 
 
-def _topic_match(profile: dict[str, Any], story: dict[str, Any]) -> float:
-    weights = profile.get("topic_weights") or {}
-    if not weights:
-        return 0.0
-    story_topics = {_topic_key(topic) for topic in story.get("topics", [])}
-    total = sum(max(0.0, float(weight)) for weight in weights.values())
+def _mentions_topic(key: str, text: str) -> bool:
+    pattern = _TOPIC_PATTERNS.get(key)
+    if pattern:
+        return bool(pattern.search(text))
+    return bool(re.search(rf"(?<!\w){re.escape(key)}(?!\w)", text, re.I))
+
+
+def _profile_scores(weights: dict[str, float], labels: set[str], text: str):
+    """Topic match uses story labels. Relevance measures interests mentioned in sourced text."""
+    total = sum(weights.values())
     if not total:
-        return 0.0
-    matched = 0.0
+        return 0.0, 0.0, []
+    matches = []
+    topic_match = 0.0
+    relevance = 0.0
     for topic, weight in weights.items():
         key = _topic_key(topic)
-        if any(key == candidate or key in candidate or candidate in key for candidate in story_topics):
-            matched += max(0.0, float(weight))
-    return min(1.0, matched / total)
-
-
-def _relevance(profile: dict[str, Any], story: dict[str, Any]) -> float:
-    """Measure how much of the listener's chosen vocabulary is in the story."""
-    weights = profile.get("topic_weights") or {}
-    if not weights:
-        return 0.0
-    text = " ".join([str(story.get("title", ""))] + [str(f.get("statement", "")) for f in story.get("facts", [])]).lower()
-    weighted_hits = 0.0
-    total = 0.0
-    for topic, weight in weights.items():
-        terms = _topic_terms(str(topic))
-        if not terms:
-            continue
-        score = sum(1 for term in terms if re.search(rf"(?<![\w]){re.escape(term)}[\w-]*(?![\w])", text)) / len(terms)
-        amount = max(0.0, float(weight))
-        weighted_hits += score * amount
-        total += amount
-    return min(1.0, weighted_hits / total) if total else 0.0
+        labeled = _has_topic(key, labels)
+        mentioned = _mentions_topic(key, text)
+        if labeled:
+            topic_match += weight
+        if mentioned:
+            relevance += weight
+        if labeled or mentioned:
+            matches.append(topic)
+    matches.sort(key=lambda topic: (-weights[topic], topic))
+    return topic_match / total, relevance / total, matches
 
 
 def _recency(story: dict[str, Any], reference_day: str) -> float:
@@ -158,11 +163,17 @@ def _trust_eligible(story: dict[str, Any]) -> tuple[bool, str]:
     sources = set()
     for fact in facts:
         article = articles.get(str(fact.get("article_id", "")))
-        if not fact.get("id") or not fact.get("evidence") or not article:
+        if not fact.get("id") or not fact.get("article_id") or not article or not fact.get("evidence"):
             return False, "incomplete provenance"
-        url = urlsplit(str(article.get("url", "")))
-        if not article.get("source") or url.scheme not in {"http", "https"} or not url.netloc:
+        try:
+            url = urlsplit(str(article.get("url", "")))
+            linked = url.scheme in {"http", "https"} and bool(url.hostname)
+        except ValueError:
+            linked = False
+        if not str(article.get("source") or "").strip() or not linked:
             return False, "missing publisher or source link"
+        if not _quantity_supported(fact, fact.get("language") or article.get("language", "en")):
+            return False, "quantity missing from cited evidence"
         sources.add(str(article["article_id"]))
     official = any(bool(articles[article_id].get("official")) for article_id in sources)
     return True, "official source included" if official else "publisher sources cited"
@@ -193,7 +204,9 @@ def _provider_batches(groups: list[list[dict[str, Any]]]):
 
 def _topics(group: list[dict[str, Any]]) -> list[str]:
     blob = " ".join(str(a.get("title", "")) + " " + str(a.get("body", ""))[:2500] for a in group).lower()
-    return [topic for topic, terms in _TOPIC_TERMS.items() if any(term in blob for term in terms)] or ["news"]
+    inferred = [topic for topic, pattern in _TOPIC_PATTERNS.items() if pattern.search(blob)]
+    supplied = [_topic_key(topic) for article in group for topic in article.get("topics", []) if str(topic).strip()]
+    return list(dict.fromkeys(inferred + supplied)) or ["news"]
 
 
 def _story_id(article_ids: list[str], title: str = "", day: str = "") -> str:
@@ -225,9 +238,10 @@ def _canonical_number(value: str, language: str = "en") -> str:
     else:
         number = number.replace(",", "")
     try:
-        return f"{float(number):.8f}".rstrip("0").rstrip(".")
-    except ValueError:
+        exact = format(Decimal(number), "f")
+    except InvalidOperation:
         return number
+    return exact.rstrip("0").rstrip(".") if "." in exact else exact
 
 
 def _canonical_unit(unit: str) -> str:
@@ -293,18 +307,81 @@ def _claim_terms(statement: str) -> set[str]:
     return terms
 
 
+def _comparison_context(text: str) -> set[str]:
+    # Period and currency qualifiers can distinguish otherwise similar claims.
+    qualifiers = re.findall(
+        r"\b(?:previous|last|current|next|prior|vorjahr\w*|vergangen\w*|n[äa]chst\w*|volgend\w*|vorig\w*|"
+        r"quarter\w*|quartal\w*|kwartaal\w*|year\w*|jahr\w*|jaar|q[1-4]|forecast|expected|prognose)\b",
+        text.casefold(),
+    )
+    denominations = {"EUR": r"€|\beur(?:os?)?\b", "USD": r"\$|\b(?:usd|dollars?)\b",
+                     "GBP": r"£|\b(?:gbp|pounds?)\b", "crown": r"\b(?:crowns?|kronen)\b"}
+    currencies = {code for code, pattern in denominations.items() if re.search(pattern, text, re.I)}
+    years = re.findall(r"\b(?:in|for|during|vor|voor|im jahr)\s+((?:19|20)\d{2})\b", text, re.I)
+    return set(qualifiers + years) | currencies
+
+
 def _claims_contradict(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if left.get("_claim_group") == right.get("_claim_group"):
         return False
-    if _topic_family(left.get("statement", "")) != _topic_family(right.get("statement", "")):
-        return False
     if _canonical_unit(left.get("unit", "")) != _canonical_unit(right.get("unit", "")):
+        return False
+    left_text, right_text = left["statement"], right["statement"]
+    if _comparison_context(left_text) != _comparison_context(right_text):
+        return False
+    measures = [{name for name, pattern in _MEASURE_PATTERNS.items() if pattern.search(text)}
+                for text in (left_text, right_text)]
+    if measures[0] and measures[1] and measures[0].isdisjoint(measures[1]):
+        return False
+    if left.get("language") != right.get("language"):
+        # Without a common sentence vocabulary, require one explicit measure
+        # and one quantity per source. Timing and denomination must also agree.
+        if len(measures[0]) != 1 or measures[0] != measures[1]:
+            return False
+        return all(len(_NUM.findall(text)) == 1 for text in (left_text, right_text))
+    if _topic_family(left_text) != _topic_family(right_text):
         return False
     first, second = _claim_terms(left.get("statement", "")), _claim_terms(right.get("statement", ""))
     shared = first & second
     # Require a specific shared metric/context. Generic words like "jobs" can
     # refer to unrelated counts within one report.
     return len(shared) >= 2 or bool(shared & {"forecast", "exports", "represented", "budget", "rate", "inflation", "receipts", "stays", "overdue", "applications", "workers"})
+
+
+def _label_conflicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep all sources for connected competing claims in one stable conflict record."""
+    peers = {fact["id"]: set() for fact in facts}
+    quantities = [_value_unit(f["value"], f["unit"], f["language"]) for f in facts]
+    for index, fact in enumerate(facts):
+        for j in range(index + 1, len(facts)):
+            other = facts[j]
+            if quantities[index] != quantities[j] and _claims_contradict(fact, other):
+                peers[fact["id"]].add(other["id"])
+                peers[other["id"]].add(fact["id"])
+
+    conflicts = []
+    conflict_by_fact = {}
+    for fact_id in list(peers):
+        if not peers.get(fact_id):
+            continue
+        group = set()
+        pending = [fact_id]
+        while pending:
+            member = pending.pop()
+            if member not in group:
+                group.add(member)
+                pending.extend(peers.pop(member, ()))
+        ids = sorted(group)
+        key = "conflict-" + hashlib.sha1("|".join(ids).encode("utf-8")).hexdigest()[:10]
+        label = "Conflicting values reported for the same measure"
+        conflict = {"id": key, "label": label, "fact_ids": ids}
+        conflicts.append(conflict)
+        conflict_by_fact.update(dict.fromkeys(ids, conflict))
+    for fact in facts:
+        fact.pop("_claim_group", None)
+        if conflict := conflict_by_fact.get(fact["id"]):
+            fact.update(conflict_status="conflict", conflict_group=conflict["id"], conflict_label=conflict["label"])
+    return conflicts
 
 
 def _offline_extract(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -344,32 +421,9 @@ def _offline_extract(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 short_evidence = _short_evidence(body, match.start(), match.start(), match.end())
                 fact_id = _fact_id(article_id, short_evidence, raw_number, unit, _language(article))
                 facts.append({"id": fact_id, "statement": short_evidence, "value": raw_number, "unit": unit, "evidence": short_evidence, "article_id": article_id, "language": _language(article), "source_sentence_hash": _sentence_hash(sentence), "conflict_status": "supported", "_claim_group": (article_id, left)})
-        conflict_pairs = []
-        for index, fact in enumerate(facts):
-            value, unit = _value_unit(fact["value"], fact["unit"], fact["language"])
-            for other in facts[index + 1:]:
-                other_value, other_unit = _value_unit(other["value"], other["unit"], other["language"])
-                if (value, unit) == (other_value, other_unit) or not _claims_contradict(fact, other):
-                    continue
-                fact["conflict_status"] = other["conflict_status"] = "conflict"
-                conflict_pairs.append(tuple(sorted((fact["id"], other["id"]))))
-        conflict_group_by_pair = {}
-        for pair in conflict_pairs:
-            group_id = "conflict-" + hashlib.sha1("|".join(pair).encode("utf-8")).hexdigest()[:10]
-            conflict_group_by_pair[pair] = group_id
-        for fact in facts:
-            if fact["conflict_status"] == "conflict":
-                peers = sorted(other["id"] for other in facts if other is not fact and other["conflict_status"] == "conflict" and _claims_contradict(fact, other) and _value_unit(fact["value"], fact["unit"], fact["language"]) != _value_unit(other["value"], other["unit"], other["language"]))
-                pair = tuple(sorted((fact["id"], peers[0]))) if peers else ()
-                fact["conflict_group"] = conflict_group_by_pair.get(pair, "")
-                fact["conflict_label"] = "Conflicting values reported for the same measure"
-        for fact in facts:
-            fact.pop("_claim_group", None)
+        conflicts = _label_conflicts(facts)
         topic_words = _topics(group)
         member_ids = [str(a.get("article_id", "")) for a in group]
-        conflicts = [{"id": fact["conflict_group"], "label": fact["conflict_label"], "fact_ids": sorted(other["id"] for other in facts if other.get("conflict_group") == fact.get("conflict_group"))} for fact in facts if fact.get("conflict_group")]
-        # De-duplicate a conflict record shared by multiple facts.
-        conflicts = list({row["id"]: row for row in conflicts}.values())
         stories.append({"id": _story_id(member_ids, str(lead.get("title", "")), _day(lead)), "title": str(lead.get("title", "Untitled")), "articles": all_articles,
                         "facts": facts, "topics": topic_words or ["news"], "publication_date": _day(lead), "conflicts": conflicts})
     return stories
@@ -458,44 +512,41 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
     # Label only competing values for the same measure and retain the label
     # with the claims so narration and evidence views can surface it.
     for story in stories:
-        facts = story["facts"]
-        for index, fact in enumerate(facts):
-            for other in facts[index + 1:]:
-                if _claims_contradict(fact, other) and _value_unit(fact["value"], fact["unit"], fact.get("language", "en")) != _value_unit(other["value"], other["unit"], other.get("language", "en")):
-                    fact["conflict_status"] = other["conflict_status"] = "conflict"
-                    pair = sorted((fact["id"], other["id"]))
-                    group_id = "conflict-" + hashlib.sha1("|".join(pair).encode("utf-8")).hexdigest()[:10]
-                    fact["conflict_group"] = other["conflict_group"] = group_id
-                    fact["conflict_label"] = other["conflict_label"] = "Conflicting values reported for the same measure"
-        story["conflicts"] = list({fact["conflict_group"]: {"id": fact["conflict_group"], "label": fact["conflict_label"], "fact_ids": sorted(other["id"] for other in facts if other.get("conflict_group") == fact.get("conflict_group"))} for fact in facts if fact.get("conflict_group")}.values())
-        for fact in facts:
-            fact.pop("_claim_group", None)
+        story["conflicts"] = _label_conflicts(story["facts"])
     return stories or _offline_extract(articles)
 
 
 def rank(stories: list[dict[str, Any]], profile: dict[str, Any]) -> list[dict[str, Any]]:
     """Apply the fixed topic, relevance, recency, and novelty score."""
-    if not stories: return []
-    ref = max((str(s.get("publication_date", ""))[:10] for s in stories), default="")
-    excluded = {_topic_key(topic) for topic in profile.get("excluded_topics", [])}
-    novelty_values = _novelty_values(stories)
-    rows = []
+    excluded = {_topic_key(topic) for topic in profile.get("excluded_topics", [])} - {""}
+    weights = {topic: float(weight) for topic, weight in (profile.get("topic_weights") or {}).items()
+               if _topic_key(topic) and float(weight) > 0}
+    candidates = []
     for story in stories:
         topics = {_topic_key(topic) for topic in story.get("topics", [])}
-        if any(any(blocked == topic or blocked in topic or topic in blocked for topic in topics) for blocked in excluded):
+        if any(_has_topic(key, topics) for key in excluded):
             continue
         eligible, trust_reason = _trust_eligible(story)
         if not eligible:
             continue
-        topic_match = _topic_match(profile, story)
-        relevance = _relevance(profile, story)
+        text = "\n".join([story.get("title", ""), *(fact["evidence"] for fact in story["facts"])])
+        if any(_mentions_topic(key, text) for key in excluded):
+            continue
+        candidates.append((story, topics, trust_reason, text))
+
+    eligible_stories = [story for story, _, _, _ in candidates]
+    ref = max((str(story.get("publication_date", ""))[:10] for story in eligible_stories), default="")
+    novelty_values = _novelty_values(eligible_stories)
+    rows = []
+    for story, topics, trust_reason, text in candidates:
+        topic_match, relevance, matches = _profile_scores(weights, topics, text)
         recency = _recency(story, ref)
         novelty = novelty_values.get(story["id"], 0.0)
         conflict = any(f.get("conflict_status") == "conflict" for f in story.get("facts", []))
         score = 0.4 * topic_match + 0.3 * relevance + 0.2 * recency + 0.1 * novelty
-        why = "Matches selected topics" if topic_match else "Sourced recent story"
+        why = "Matches your interest in " + ", ".join(matches[:2]) if matches else "Sourced recent story"
         if conflict:
-            why += "; conflicting figures are labeled"
+            why += ". Conflicting figures are labeled"
         item = dict(story)
         item["trust_eligible"] = True
         item["trust_reason"] = trust_reason
