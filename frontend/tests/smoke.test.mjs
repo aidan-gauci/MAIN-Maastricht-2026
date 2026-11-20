@@ -124,6 +124,37 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   await page.getByRole('button', { name: 'Back to briefing story' }).click();
   assert.equal(await inspect.evaluate(button => button === document.activeElement), true);
 
+  // Linked traces: spoken claim -> extracted facts -> source articles, reached from the transcript.
+  const trace = story.getByRole('button', { name: /^Trace the claims in this segment/ }).first();
+  await trace.click();
+  await page.getByRole('heading', { name: 'Every claim, linked to its source.' }).waitFor();
+  const tracePanel = page.locator(`#trace-panel-${firstSegment.id}`);
+  const traceToggle = page.locator(`[aria-controls="trace-panel-${firstSegment.id}"]`);
+  assert.equal(await traceToggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(await traceToggle.evaluate(button => button === document.activeElement), true);
+  await tracePanel.locator('.trace-spoken .trace-quote').first().waitFor();
+  assert.ok(await tracePanel.locator('.trace-fact').count() > 0, 'trace shows facts behind the spoken claim');
+  const traceFactIds = await tracePanel.locator('.trace-fact code').allInnerTexts();
+  for (const factId of firstSegment.fact_ids) assert.ok(traceFactIds.includes(factId), `trace lists ${factId}`);
+  const traceLinks = await tracePanel.locator('.trace-source a').evaluateAll(links => links.map(link => link.getAttribute('href')));
+  assert.ok(traceLinks.includes(firstSegment.sources[0].url), 'trace links to the cited article');
+  assert.equal(await tracePanel.locator('.trace-source a').first().getAttribute('target'), '_blank');
+  if (new Set(firstSegment.sources.map(item => item.article_id)).size > 1) {
+    await tracePanel.getByText(/^\d+ sources agree$/).first().waitFor();
+  }
+  await page.getByRole('button', { name: 'Expand all segments' }).click();
+  if (briefing.segments.some(item => item.conflict)) {
+    await page.locator('.trace-conflict').first().waitFor();
+    await page.locator('.trace-conflict .trace-chip.warn').first().waitFor();
+  }
+  await page.getByText('Every spoken figure traces to cited reporting.').waitFor();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'traces fit the phone viewport');
+  await page.getByRole('button', { name: 'Back to briefing' }).click();
+  assert.equal(await trace.evaluate(button => button === document.activeElement), true);
+  await trace.click();
+  assert.equal(await traceToggle.evaluate(button => button === document.activeElement), true, 'a second jump focuses the segment again');
+  await page.getByRole('button', { name: 'Back to briefing' }).click();
+
   await page.getByRole('button', { name: 'Costs', exact: true }).click();
   const costs = page.getByRole('table');
   await costs.getByRole('cell', { name: 'speech_generation' }).waitFor();
