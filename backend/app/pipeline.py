@@ -7,6 +7,8 @@ import os
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from heapq import nlargest
@@ -92,8 +94,42 @@ _TOPIC_TERMS = {
     "earnings": r"earnings|profits?|revenue|winst|gewinn|umsatz|omzet|quartalsumsatz|kwartaalomzet",
     "technology": r"technology|technologie|software|semiconductors?",
 }
+
+
 _TOPIC_PATTERNS = {topic: re.compile(rf"\b(?:{terms})\b", re.I) for topic, terms in _TOPIC_TERMS.items()}
-_TOPIC_ALIASES = {"rate": "rates", "interest rate": "rates", "interest rates": "rates", "trade and exports": "trade", "prices": "inflation", "employment": "jobs", "transportation": "transport"}
+
+# Plain terms for ranking relevance. A story matches a topic axis in proportion
+# to how many of these terms appear in its title and verified facts.
+_RELEVANCE_TERMS = {
+    "growth": ("growth", "forecast", "wachstum", "prognose", "groei", "verwachting"),
+    "trade": ("export", "trade", "handel", "exports"),
+    "rates": ("rate", "rente", "leitzins", "interest", "basis point", "basispunkt"),
+    "inflation": ("inflation", "prices", "preise", "prijzen", "price"),
+    "jobs": ("jobs", "workers", "arbeitsplatz", "banen", "wage", "lohn", "loon", "dockworkers"),
+    "energy": ("energy", "solar", "megawatt", "electricity", "energie"),
+    "housing": ("housing", "rent", "home", "household", "haushalt", "huishouden"),
+    "industry": ("factory", "manufactur", "industry", "industrie", "grant", "equipment"),
+    "tourism": ("tourism", "tourismus", "toerisme", "visitor", "receipts", "stays", "nächtigungen"),
+    "agriculture": ("farm", "agriculture", "fertilizer", "feed", "landwirtschaft"),
+    "credit": ("loan", "credit", "lender", "kredit", "krediet", "payment", "overdue"),
+    "transport": ("rail", "freight", "port", "harbor", "hafen", "haven", "border"),
+    "markets": ("market", "bank", "auction", "investment", "exports", "trade"),
+    "earnings": ("earnings", "profit", "revenue", "winst", "gewinn", "umsatz", "omzet"),
+    "technology": ("technology", "technologie", "software", "semiconductor"),
+}
+
+
+_TOPIC_ALIASES = {"rate": "rates", "interest rates": "rates", "trade and exports": "trade", "prices": "inflation", "employment": "jobs", "transportation": "transport"}
+FEEDBACK_WEIGHT = 0.1
+
+# ISO alpha-2 members of UN M49 region 150 (Europe).
+_EUROPE_COUNTRIES = frozenset("""
+    BY BG CZ HU PL MD RO RU SK UA
+    AX DK EE FO FI GG IS IE IM JE LV LT NO SJ SE GB
+    AL AD BA HR GI GR VA IT MT ME MK PT SM RS SI ES
+    AT BE FR DE LI LU MC NL CH
+""".lower().split())
+_GEOGRAPHY_FIELDS = ("region", "country_code", "country")
 
 
 def _topic_key(value: Any) -> str:
@@ -117,36 +153,43 @@ def _positive_topic_weights(profile: dict[str, Any]) -> dict[str, float]:
             if _topic_key(topic) and float(weight) > 0}
 
 
-class _RankingCandidate(NamedTuple):
-    story: dict[str, Any]
-    labels: set[str]
-    trust_reason: str
-    text: str
-    known_topics: dict[str, tuple[bool, bool]]
+def _topic_terms(value: str) -> tuple[str, ...]:
+    key = _topic_key(value)
+    terms = _RELEVANCE_TERMS.get(key)
+    if terms:
+        return terms
+    return tuple(re.findall(r"[a-z0-9]+", key))
 
 
-def _topic_matches(key, candidate):
-    if key in candidate.known_topics:
-        return candidate.known_topics[key]
-    return _has_topic(key, candidate.labels), _mentions_topic(key, candidate.text)
+def _matches_topic(axis: str, topics: Iterable[str]) -> bool:
+    return any(axis in topic or topic in axis for topic in topics)
 
 
-def _profile_scores(interests, total, candidate):
-    """Topic match uses labels. Relevance uses interest matches in sourced text."""
-    if not total:
-        return 0.0, 0.0, []
-    matches = []
-    topic_match = 0.0
-    relevance = 0.0
-    for topic, key, weight in interests:
-        labeled, mentioned = _topic_matches(key, candidate)
-        if labeled:
-            topic_match += weight
-        if mentioned:
-            relevance += weight
-        if labeled or mentioned:
-            matches.append(topic)
-    return topic_match / total, relevance / total, matches
+def _story_topics(story: dict[str, Any]) -> set[str]:
+    return {_topic_key(topic) for topic in story.get("topics", [])}
+
+
+def _matches_region(story: dict[str, Any], region: str) -> bool:
+    if region == "all":
+        return True
+    geography = {
+        str(record.get(field, "")).strip().lower()
+        for record in (story, *story.get("articles", []))
+        for field in _GEOGRAPHY_FIELDS
+    }
+    return region in geography or (region == "europe" and bool(geography & _EUROPE_COUNTRIES))
+
+
+def _article_reference(article: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "article_id": str(article.get("article_id", "")),
+        "title": article.get("title", ""),
+        "source": article.get("source", ""),
+        "url": article.get("url", ""),
+        "language": _language(article),
+        "official": bool(article.get("official", False)),
+        **{field: article[field] for field in _GEOGRAPHY_FIELDS if article.get(field)},
+    }
 
 
 def _recency(story: dict[str, Any], reference_day: str) -> float:
@@ -413,7 +456,7 @@ def _offline_extract(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         facts: list[dict[str, Any]] = []
         for article in group:
             article_id = str(article.get("article_id", ""))
-            all_articles.append({"article_id": article_id, "title": article.get("title", ""), "source": article.get("source", ""), "url": article.get("url", ""), "language": _language(article), "official": bool(article.get("official", False))})
+            all_articles.append(_article_reference(article))
             body = str(article.get("body", ""))[:12000]
             # Require a nearby topical word, so arbitrary numbers (IDs, dates)
             # do not become candidate claims.
@@ -514,7 +557,7 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
         referenced = sorted({member for aid in cited_ids for member in members_by_article.get(aid, {aid})})
         day = max((_day(by_id[aid]) for aid in referenced), default="")
         story_id = _story_id(referenced, str(item.get("title", "")), day)
-        refs = [{"article_id": aid, "title": by_id[aid].get("title", ""), "source": by_id[aid].get("source", ""), "url": by_id[aid].get("url", ""), "language": _language(by_id[aid]), "official": bool(by_id[aid].get("official", False))} for aid in referenced]
+        refs = [_article_reference(by_id[aid]) for aid in referenced]
         if story_id not in clustered:
             clustered[story_id] = {"id": story_id, "title": str(item.get("title", "Untitled")), "articles": refs, "facts": [], "topics": [], "publication_date": day, "conflicts": []}
         story = clustered[story_id]
@@ -532,66 +575,243 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
     return stories or _offline_extract(articles)
 
 
-def prepare_ranking(stories):
-    """Index supported topic matches and provenance once per corpus snapshot."""
-    candidates = []
-    for story in stories:
-        eligible, trust_reason = _trust_eligible(story)
-        if eligible:
-            topics = {_topic_key(topic) for topic in story.get("topics", [])}
-            text = "\n".join([story.get("title", ""), *(fact["evidence"] for fact in story["facts"])])
-            known_topics = {key: (_has_topic(key, topics), _mentions_topic(key, text)) for key in _TOPIC_PATTERNS}
-            candidates.append(_RankingCandidate(story, topics, trust_reason, text, known_topics))
-    return candidates
+def _profile_names(profile: dict[str, Any]) -> dict[str, str]:
+    """Listener-facing names for weighted axes, so reasons repeat the listener's own words."""
+    names: dict[str, str] = {}
+    for topic in profile.get("topic_weights") or {}:
+        names.setdefault(_topic_key(topic), str(topic))
+    return names
 
 
-def rank(stories: list[dict[str, Any]], profile: dict[str, Any],
-         *, prepared=None, limit=None) -> list[dict[str, Any]]:
-    """Apply the fixed topic, relevance, recency, and novelty score."""
-    excluded = {_topic_key(topic) for topic in profile.get("excluded_topics", [])} - {""}
-    weights = _positive_topic_weights(profile)
-    interests = sorted(
-        ((topic, _topic_key(topic), weight) for topic, weight in weights.items()),
-        key=lambda interest: (-interest[2], interest[0]),
-    )
-    total = sum(weights.values())
-    corpus = prepare_ranking(stories) if prepared is None else prepared
-    candidates = [
-        candidate for candidate in corpus
-        if not any(any(_topic_matches(key, candidate)) for key in excluded)
+def _profile_weights(profile: dict[str, Any]) -> list[tuple[str, float]]:
+    # Aliases share story features. Keep the original term order and weights
+    # so scores preserve the baseline's summation and tie behavior.
+    return [
+        (_topic_key(topic), max(0.0, float(weight)))
+        for topic, weight in (profile.get("topic_weights") or {}).items()
     ]
-    eligible_stories = [candidate.story for candidate in candidates]
-    ref = max((str(story.get("publication_date", ""))[:10] for story in eligible_stories), default="")
-    novelty_values = _novelty_values(eligible_stories)
 
-    def scored():
-        for candidate in candidates:
-            story = candidate.story
-            topic_match, relevance, matches = _profile_scores(interests, total, candidate)
-            recency = _recency(story, ref)
-            novelty = novelty_values.get(story["id"], 0.0)
-            score = 0.4 * topic_match + 0.3 * relevance + 0.2 * recency + 0.1 * novelty
-            yield score, candidate, matches, topic_match, relevance, recency, novelty
 
-    def order(row):
-        story = row[1].story
-        return row[0], story.get("publication_date", ""), story.get("id", "")
+def _feedback_weights(
+    weights: list[tuple[str, float]],
+    stories: list[dict[str, Any]],
+    events: Iterable[dict[str, Any]],
+) -> list[tuple[str, float]]:
+    # Events arrive oldest first. Each story's latest rating contributes once
+    # per matching axis. Sum the signed 0.1 steps before clamping.
+    latest = {
+        event["story_id"]: event["rating"]
+        for event in events
+        if event.get("story_id") and event.get("rating") in ("up", "down")
+    }
+    configured_axes = {axis for axis, _ in weights}
+    deltas: Counter[str] = Counter()
+    for story in stories:
+        rating = latest.pop(story.get("id"), None)
+        if rating is None:
+            continue
+        topics = _story_topics(story)
+        axes = {axis for axis in configured_axes if _matches_topic(axis, topics)}
+        axes.update(topic for topic in topics if not _matches_topic(topic, configured_axes))
+        for axis in sorted(axes):
+            deltas[axis] += 1 if rating == "up" else -1
+    adjusted = [
+        (axis, min(1.0, max(0.0, weight + deltas[axis] * FEEDBACK_WEIGHT)) if deltas[axis] else weight)
+        for axis, weight in weights
+    ]
+    adjusted.extend(
+        (axis, min(1.0, steps * FEEDBACK_WEIGHT))
+        for axis, steps in sorted(deltas.items()) if axis not in configured_axes and steps > 0
+    )
+    return adjusted
 
-    top = sorted(scored(), key=order, reverse=True) if limit is None else nlargest(limit, scored(), key=order)
+
+def _unspoken_story(story: dict[str, Any], spoken: set[str]) -> dict[str, Any]:
+    facts = [fact for fact in _verified_facts(story) if str(fact["id"]) not in spoken]
+    remaining = {fact["id"] for fact in facts}
+    conflicts = []
+    for conflict in story.get("conflicts", []):
+        fact_ids = [fact_id for fact_id in conflict["fact_ids"] if fact_id in remaining]
+        if fact_ids:
+            conflicts.append({**conflict, "fact_ids": fact_ids})
+    return {**story, "facts": facts, "conflicts": conflicts}
+
+
+@dataclass(frozen=True)
+class _StoryFeatures:
+    story: dict[str, Any]
+    matching_topics: set[str]
+    relevance: dict[str, float]
+    mentions: frozenset[str]
+    recency: float
+    novelty: float
+    trust_reason: str
+
+
+def _story_features(
+    stories: list[dict[str, Any]],
+    weight_axes: set[str],
+    exclusion_axes: set[str],
+    spoken: set[str],
+    region: str,
+) -> tuple[list[_StoryFeatures], set[str]]:
+    # Unsourced or unlinked stories must not move the recency reference or duplicate counts.
+    sourced = [story for story in stories if _trust_eligible(story)[0]]
+    reference_day = max((str(story.get("publication_date", ""))[:10] for story in sourced), default="")
+    novelty = _novelty_values(sourced)
+    vocabulary = {
+        axis: tuple(re.compile(rf"(?<![\w]){re.escape(term)}[\w-]*(?![\w])") for term in _topic_terms(axis))
+        for axis in sorted(weight_axes)
+    }
+    vocabulary = {axis: patterns for axis, patterns in vocabulary.items() if patterns}
+    axes = weight_axes | exclusion_axes
     rows = []
-    for score, candidate, matches, topic_match, relevance, recency, novelty in top:
-        story = candidate.story
-        why = "Matches your interest in " + ", ".join(matches[:2]) if matches else "Sourced recent story"
+    for story in stories:
+        if not _matches_region(story, region):
+            continue
+        eligible, trust_reason = _trust_eligible(story)
+        if not eligible:
+            continue
+        if spoken:
+            story = _unspoken_story(story, spoken)
+            eligible, trust_reason = _trust_eligible(story)
+            if not eligible:
+                continue
+        topics = _story_topics(story)
+        content = " ".join(
+            [str(story.get("title", ""))]
+            + [str(fact.get("statement", "")) for fact in story.get("facts", [])]
+        ).lower()
+        evidence = " ".join([str(story.get("title", "")), *(str(fact.get("evidence", "")) for fact in story.get("facts", []))])
+        mentions = frozenset(axis for axis in axes if _mentions_topic(axis, evidence))
+        relevance = {
+            axis: 1.0 if axis in mentions else sum(bool(pattern.search(content)) for pattern in patterns) / len(patterns)
+            for axis, patterns in vocabulary.items()
+        }
+        rows.append(_StoryFeatures(
+            story, {axis for axis in axes if _matches_topic(axis, topics)}, relevance, mentions,
+            _recency(story, reference_day), novelty.get(story["id"], 0.0), trust_reason,
+        ))
+    return rows, set(vocabulary)
+
+
+def _rank_batch(
+    stories: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+    feedback_events: Iterable[dict[str, Any]] = (),
+    spoken: set[str] | None = None,
+    region: str = "all",
+) -> list[list[dict[str, Any]]]:
+    events = list(feedback_events)
+    weights = [_profile_weights(profile) for profile in profiles]
+    if events:
+        weights = [_feedback_weights(row, stories, events) for row in weights]
+    exclusions = [{_topic_key(topic) for topic in profile.get("excluded_topics", [])} for profile in profiles]
+    features, relevance_axes = _story_features(
+        stories, {axis for row in weights for axis, _ in row}, set().union(*exclusions), spoken or set(), region,
+    )
+    # Sparse dot products over shared topic axes. Story parsing, vocabulary
+    # matching, time and duplicate scores are computed once for the batch.
+    return [
+        _rank_profile(features, row, excluded, relevance_axes, _profile_names(profile))
+        for row, excluded, profile in zip(weights, exclusions, profiles)
+    ]
+
+
+def _rank_profile(
+    features: list[_StoryFeatures],
+    weights: list[tuple[str, float]],
+    excluded: set[str],
+    relevance_axes: set[str],
+    names: dict[str, str],
+) -> list[dict[str, Any]]:
+    topic_total = sum(weight for _, weight in weights)
+    relevance_weights = [(axis, weight) for axis, weight in weights if axis in relevance_axes]
+    relevance_total = 0.0
+    for _, weight in relevance_weights:
+        relevance_total += weight
+    rows = []
+    for feature in features:
+        if excluded & (feature.matching_topics | feature.mentions):
+            continue
+        story = feature.story
+        matching = [(axis, weight) for axis, weight in weights if axis in feature.matching_topics and weight > 0]
+        matched_weight = 0.0
+        for _, weight in matching:
+            matched_weight += weight
+        weighted_hits = 0.0
+        for axis, weight in relevance_weights:
+            weighted_hits += feature.relevance[axis] * weight
+        topic_match = min(1.0, matched_weight / topic_total) if topic_total else 0.0
+        relevance = min(1.0, weighted_hits / relevance_total) if relevance_total else 0.0
+        score = 0.4 * topic_match + 0.3 * relevance + 0.2 * feature.recency + 0.1 * feature.novelty
+        why = "Sourced recent story"
+        related = matching or [
+            (axis, feature.relevance[axis] * weight) for axis, weight in relevance_weights
+            if feature.relevance[axis] and weight > 0
+        ]
+        if related:
+            contributions: dict[str, float] = {}
+            for axis, amount in related:
+                contributions[axis] = contributions.get(axis, 0.0) + amount
+            topics = sorted(contributions, key=lambda axis: (-contributions[axis], axis))[:3]
+            why = "Matches your interest in " + ", ".join(names.get(axis, axis) for axis in topics)
         if any(f.get("conflict_status") == "conflict" for f in story.get("facts", [])):
             why += ". Conflicting figures are labeled"
-        rows.append({
-            **story, "trust_eligible": True, "trust_reason": candidate.trust_reason, "reason": why,
+        rows.append((score, {
+            **story,
+            "trust_eligible": True,
+            "trust_reason": feature.trust_reason,
             "score_components": {
-                "topic_match": round(topic_match, 4), "relevance": round(relevance, 4),
-                "recency": round(recency, 4), "novelty": round(novelty, 4), "score": round(score, 4),
+                "topic_match": round(topic_match, 4),
+                "relevance": round(relevance, 4),
+                "recency": round(feature.recency, 4),
+                "novelty": round(feature.novelty, 4),
+                "score": round(score, 4),
             },
-        })
-    return rows
+            "reason": why,
+        }))
+    rows.sort(key=lambda row: (row[0], row[1].get("publication_date", ""), row[1].get("id", "")), reverse=True)
+    return [story for _, story in rows]
+
+
+def prepare_ranking(stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Corpus snapshot handed to rank(prepared=...). Ranking derives its features per call."""
+    return list(stories)
+
+
+def rank(
+    stories: list[dict[str, Any]],
+    profile: dict[str, Any],
+    *,
+    feedback_events: Iterable[dict[str, Any]] | None = None,
+    spoken_fact_ids: Iterable[str] | None = None,
+    region: str = "all",
+    prepared: list[dict[str, Any]] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Rank with listener-scoped events and IDs from the preceding seven days.
+
+    The caller owns listener identity and expiration. Feedback must be in
+    chronological order or already reduced to the latest rating per story.
+    """
+    region = region.strip().lower()
+    if region not in {"all", "europe"} and not re.fullmatch(r"[a-z]{2}", region):
+        raise ValueError("Region must be all, Europe, or an ISO alpha-2 country code")
+    ranked = _rank_batch(
+        stories if prepared is None else prepared, [profile], feedback_events or (), set(spoken_fact_ids or ()), region,
+    )[0]
+    return ranked if limit is None else ranked[:limit]
+
+
+def rank_profiles(
+    stories: list[dict[str, Any]], profiles: Iterable[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Rank all configured profiles without any listener-specific inputs."""
+    configured = list(profiles)
+    if not configured:
+        return {}
+    return {profile["id"]: rows for profile, rows in zip(configured, _rank_batch(stories, configured))}
 
 
 def _quantity_supported(fact: dict[str, Any], language: str) -> bool:
@@ -607,39 +827,55 @@ def _quantity_supported(fact: dict[str, Any], language: str) -> bool:
     return False
 
 
+def _verified_facts(story: dict[str, Any]) -> list[dict[str, Any]]:
+    articles = {str(article.get("article_id")): article for article in story.get("articles", [])}
+    facts = []
+    for fact in story.get("facts", []):
+        article = articles.get(str(fact.get("article_id", "")))
+        if fact.get("id") and article and fact.get("evidence"):
+            language = str(fact.get("language") or article.get("language", "en"))
+            if _quantity_supported(fact, language):
+                facts.append(fact)
+    return facts
+
+
 _SPELLED_NUMBERS = re.compile(r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|hundred|thousand|million|billion|null|eins|zwei|drei|vier|f[uü]nf|sechs|sieben|acht|neun|zehn|elf|zw[oö]lf|zwanzig|dreißig|vierzig|f[uü]nfzig|hundert|tausend|een|twee|drie|vier|vijf|zes|zeven|acht|negen|tien|twintig|dertig|honderd|duizend)\b", re.I)
 
 
-def _script_is_valid(candidate: str, facts: list[dict[str, Any]],
-                     ordered_quantities: list[tuple[str, str]], language: str) -> bool:
+def _script_sentences(text: str) -> list[str]:
+    return re.split(r"(?<=[.!?])\s+", " ".join(text.split()))
+
+
+def _script_is_valid(
+    candidate: str,
+    facts: list[dict[str, Any]],
+    approved: list[str],
+) -> bool:
     text = str(candidate or "").strip()
     without_units = re.sub(_UNIT_PATTERN, " ", text, flags=re.I)
     if not text or re.search(r"\b(?:fact|story)-[a-z0-9-]+\b", text, re.I) or _SPELLED_NUMBERS.search(without_units):
         return False
     source_hashes = {str(f.get("source_sentence_hash")) for f in facts if f.get("source_sentence_hash")}
-    if any(_sentence_hash(sentence) in source_hashes for sentence in re.split(r"(?<=[.!?])\s+", text)):
+    sentences = _script_sentences(text)
+    if any(_sentence_hash(sentence) in source_hashes for sentence in sentences):
         return False
-    mentions = []
-    for match in _NUM.finditer(text):
-        number = _NUMBER.search(match.group(0))
-        if number:
-            unit = match.group(0)[number.end():].strip()
-            mentions.append((_canonical_number(number.group(0), language), _canonical_unit(unit)))
-    return list(dict.fromkeys(mentions)) == ordered_quantities
+    return sentences[0] == approved[0] and Counter(sentences[1:]) == Counter(approved[1:])
 
 
 _MEASURE_LABELS = (
+    (r"revenue|turnover|umsatz|omzet", {"en": "revenue", "de": "Umsatz", "nl": "omzet"}),
+    (r"(?:operating )?profit|gewinn|winst", {"en": "profit", "de": "Gewinn", "nl": "winst"}),
     (r"growth forecast|wachstumsprognose|groeiverwachting", {"en": "growth forecast", "de": "Wachstumsprognose", "nl": "groeiverwachting"}),
     (r"policy rate|leitzins|beleidsrente", {"en": "policy rate", "de": "Leitzins", "nl": "beleidsrente"}),
     (r"basis points?|basispunkte|basispunten", {"en": "rate change", "de": "Zinsänderung", "nl": "renteverandering"}),
-    (r"inflation|teuerung", {"en": "inflation", "de": "Inflation", "nl": "inflatie"}),
+    (r"inflati(?:on|e)|teuerung", {"en": "inflation", "de": "Inflation", "nl": "inflatie"}),
     (r"pay rise|wage|lohn|loon", {"en": "pay increase", "de": "Lohnerhöhung", "nl": "loonsverhoging"}),
     (r"jobs?|arbeitsplätze|banen|workers?|arbeitnehmer|werknemers", {"en": "job or worker count", "de": "Beschäftigtenzahl", "nl": "aantal banen"}),
     (r"application|anträge|aanvragen|equipment grant|investitionszuschuss|investeringssubsidie", {"en": "grant applications", "de": "Förderanträge", "nl": "subsidieaanvragen"}),
     (r"saving rate|savings|sparquote|spaarquote", {"en": "saving rate", "de": "Sparquote", "nl": "spaarquote"}),
     (r"food prices|lebensmittelpreise|voedselprijzen", {"en": "food prices", "de": "Lebensmittelpreise", "nl": "voedselprijzen"}),
-    (r"solar capacity|megawatts?|solar|photovoltaik|zonne-energie", {"en": "solar capacity", "de": "Solarkapazität", "nl": "zonnecapaciteit"}),
-    (r"per megawatt|weighted average price|contract bid|auktion|auction", {"en": "contract price", "de": "Vertragspreis", "nl": "contractprijs"}),
+    (r"solar capacity|solarkapazität|photovoltaikkapazität|zonnecapaciteit", {"en": "solar capacity", "de": "Solarkapazität", "nl": "zonnecapaciteit"}),
+    (r"per megawatt|weighted average price|contract bid", {"en": "contract price", "de": "Vertragspreis", "nl": "contractprijs"}),
     (r"tourism receipts|tourismus|toerisme|touristische einnahmen", {"en": "tourism receipts", "de": "Tourismuseinnahmen", "nl": "toeristische inkomsten"}),
     (r"overnight stays|nächtigungen|overnachtingen", {"en": "overnight stays", "de": "Übernachtungen", "nl": "overnachtingen"}),
     (r"credit line|loan guarantee|kreditlinie|kredietlijn|loans?|kredite|leningen", {"en": "business credit", "de": "Unternehmenskredit", "nl": "bedrijfskrediet"}),
@@ -648,91 +884,133 @@ _MEASURE_LABELS = (
 )
 
 
-def _measure_label(fact: dict[str, Any], language: str, story_topics: list[str]) -> str:
+def _measure_label(fact: dict[str, Any], source_language: str, language: str) -> str:
     text = str(fact.get("evidence", "")).lower()
+    quantity = _value_unit(fact.get("value", ""), fact.get("unit", ""), source_language)
+    amounts = list(_NUM.finditer(text))
+    candidates = []
     for pattern, labels in _MEASURE_LABELS:
-        if re.search(pattern, text, re.I):
-            return labels.get(language, labels["en"])
-    topic = _topic_key(next(iter(story_topics), "reported measure"))
-    topic_labels = {
-        "growth": {"en": "growth forecast", "de": "Wachstumsprognose", "nl": "groeiverwachting"},
-        "rates": {"en": "rate", "de": "Zinssatz", "nl": "rente"},
-        "industry": {"en": "industry grant", "de": "Industrieförderung", "nl": "industriesubsidie"},
-        "energy": {"en": "energy figure", "de": "Energiewert", "nl": "energiecijfer"},
-        "tourism": {"en": "tourism figure", "de": "Tourismuswert", "nl": "toerismecijfer"},
-    }
-    return topic_labels.get(topic, {}).get(language, "reported measure")
+        for match in re.finditer(pattern, text):
+            # Anchor each label to the nearest quantity, so another figure
+            # in the same sentence cannot inherit this measure's label.
+            closest = min(
+                amounts,
+                key=lambda amount: max(0, match.start() - amount.end(), amount.start() - match.end()),
+            )
+            if _value_unit(closest.group(0), language=source_language) == quantity:
+                distance = max(0, match.start() - closest.end(), closest.start() - match.end())
+                candidates.append((distance, labels.get(language, labels["en"])))
+    if candidates:
+        return min(candidates, key=lambda candidate: candidate[0])[1]
+    return {"de": "berichtete Kennzahl", "nl": "gerapporteerd cijfer"}.get(language, "reported measure")
+
+
+def _spoken_number(value: str, source_language: str, output_language: str) -> str:
+    token = _NUMBER.search(value).group(0)
+    if (source_language in {"de", "nl"}) == (output_language in {"de", "nl"}):
+        return token
+    if output_language in {"de", "nl"}:
+        return token.replace(",", "").replace(".", ",")
+    return token.replace(".", "").replace(",", ".")
+
+
+_NARRATION_UNITS = (
+    ({"percent"}, {"en": "percent", "de": "Prozent", "nl": "procent"}),
+    ({"basis points", "basispunkte", "basispunten"}, {"en": "basis points", "de": "Basispunkte", "nl": "basispunten"}),
+    ({"applications", "application", "anträge", "aanvragen"}, {"en": "applications", "de": "Anträge", "nl": "aanvragen"}),
+)
+
+_NARRATION_FRAMES = {
+    "en": {"beginner": "In plain terms, here’s what the sources report.", "intermediate": "Here’s what the sources report.", "advanced": "Here are the reported measures."},
+    "de": {"beginner": "Einfach gesagt steht Folgendes in den Quellen.", "intermediate": "Das berichten die Quellen.", "advanced": "Das sind die berichteten Kennzahlen."},
+    "nl": {"beginner": "Eenvoudig gezegd melden de bronnen het volgende.", "intermediate": "Dit melden de bronnen.", "advanced": "Dit zijn de gerapporteerde cijfers."},
+}
 
 
 def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: Any) -> list[dict[str, Any]]:
     """Emphasize the listener's interests while retaining the verified claims."""
     result = []
     duration = max(1, int(profile.get("duration", 5) or 5))
-    limit = max(1, min(len(ranked), duration))
     output_language = str(profile.get("language", "en")).lower()
-    interests = [(_topic_key(topic), weight) for topic, weight in _positive_topic_weights(profile).items()]
-    for story in ranked[:limit]:
+    expertise = str(profile.get("expertise", "intermediate")).lower()
+    style = str(profile.get("style") or "neutral")
+    style_words = style.lower()
+    lead_with_figures = any(phrase in style_words for phrase in ("lead with", "concise", "focus on drivers"))
+    plain_language = any(phrase in style_words for phrase in ("plain language", "everyday decisions"))
+    frame = _NARRATION_FRAMES.get(output_language, _NARRATION_FRAMES["en"])
+    introduction = frame.get(expertise, frame["intermediate"])
+    for story in ranked:
         by_id = {str(a.get("article_id")): a for a in story.get("articles", [])}
-        facts = [fact for fact in story.get("facts", []) if fact.get("id") and str(fact.get("article_id", "")) in by_id and fact.get("evidence") and _quantity_supported(fact, str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en")))]
+        facts = _verified_facts(story)
         if not facts:
             continue
         ids = list(dict.fromkeys(str(f["id"]) for f in facts))
         cited_ids = list(dict.fromkeys(str(f.get("article_id")) for f in facts))
         sources = [by_id[aid] for aid in cited_ids if aid in by_id]
         conflicted = any(f.get("conflict_status") == "conflict" for f in facts)
-        # Prefer a number's original output-language form, then deduplicate
-        # cross-language editions by their canonical quantity.
-        preferred = sorted(facts, key=lambda f: str(f.get("language", by_id[str(f["article_id"])].get("language", "en"))) != output_language)
-        by_quantity = {}
-        for fact in preferred:
-            source_language = str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en"))
-            quantity = _value_unit(fact["value"], fact.get("unit", ""), source_language)
-            by_quantity.setdefault(quantity, fact)
-
-        # Sort the presentation after choosing sourced quantities and citations.
-        # Stable sorting keeps the previous order when interests don't distinguish the claims.
-        ordered_quantities = sorted(by_quantity, key=lambda quantity: -sum(
-            weight for topic, weight in interests if _mentions_topic(topic, by_quantity[quantity]["evidence"])
-        ))
-        claims = []
-        for quantity in ordered_quantities:
-            fact = by_quantity[quantity]
-            source_language = str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en"))
-            value = fact["value"]
-            if (source_language == "en") != (output_language == "en"):
-                value = quantity[0] if output_language == "en" else quantity[0].replace(".", ",")
-            amount = f"{value} {fact.get('unit', '')}".strip()
-            label = _measure_label(fact, output_language, story.get("topics", []))
-            claims.append((label, amount, fact["evidence"]))
-        measures = "; ".join(f"{label}: {amount}" for label, amount, _ in claims)
-        expertise = str(profile.get("expertise", "intermediate"))
-        frames = {
-            "en": {"beginner": f"In plain terms, the reports give these measures: {measures}.", "intermediate": f"The reports give these measures: {measures}.", "advanced": f"Reported measures: {measures}."},
-            "de": {"beginner": f"Einfach gesagt, nennen die Berichte diese Werte: {measures}.", "intermediate": f"Die Berichte nennen diese Werte: {measures}.", "advanced": f"Berichtete Kennzahlen: {measures}."},
-            "nl": {"beginner": f"Eenvoudig gezegd noemen de berichten deze cijfers: {measures}.", "intermediate": f"De berichten noemen deze cijfers: {measures}.", "advanced": f"Gerapporteerde cijfers: {measures}."},
+        source_languages = {
+            fact["id"]: str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en"))
+            for fact in facts
         }
-        text = frames.get(output_language, frames["en"]).get(expertise, frames.get(output_language, frames["en"])["intermediate"])
-        conflict_text = {"en": "The reports give conflicting values.", "de": "Die Berichte nennen unterschiedliche Werte.", "nl": "De berichten noemen verschillende waarden."}.get(output_language, "The reports give conflicting values.")
-        # Use the local summary when a provider drops, adds, or reorders quantities.
-        if getattr(providers, "live", False):
-            context_rows = "\n".join(
-                f"source context={evidence}; verified amount={amount}"
-                for _, amount, evidence in claims
+        # Equivalent source facts share a spoken measure and retain all of
+        # their citations. Equal values for different measures stay distinct.
+        preferred = sorted(facts, key=lambda fact: source_languages[fact["id"]] != output_language)
+        approved = [introduction]
+        claim_facts: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for fact in preferred:
+            source_language = source_languages[fact["id"]]
+            value, unit = _value_unit(fact["value"], fact.get("unit", ""), source_language)
+            label = _measure_label(fact, source_language, output_language)
+            spoken_unit = next(
+                (labels.get(output_language, labels["en"]) for aliases, labels in _NARRATION_UNITS if unit in aliases),
+                str(fact.get("unit") or unit),
             )
+            key = (label, value, spoken_unit.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            claim_facts.append(fact)
+            number = _spoken_number(str(fact["value"]), source_language, output_language)
+            amount = f"{number} {spoken_unit}".strip()
+            heading = label[:1].upper() + label[1:]
+            if lead_with_figures:
+                approved.append(f"{amount} ({label}).")
+            elif plain_language:
+                verb = {"de": "lag bei", "nl": "was"}.get(output_language, "was")
+                approved.append(f"{heading} {verb} {amount}.")
+            else:
+                approved.append(f"{heading}, {amount}.")
+        # Shared summaries emphasize the listener's interests. A stable sort keeps
+        # the source order when interests do not distinguish the claims.
+        interests = [(_topic_key(topic), weight) for topic, weight in _positive_topic_weights(profile).items()]
+        if interests and len(claim_facts) > 1:
+            scores = [
+                -sum(weight for topic, weight in interests if _mentions_topic(topic, str(fact.get("evidence", ""))))
+                for fact in claim_facts
+            ]
+            order = sorted(range(len(claim_facts)), key=lambda index: scores[index])
+            approved = [approved[0]] + [approved[index + 1] for index in order]
+        text = " ".join(approved)
+        conflict_text = {"en": "The reports give conflicting values.", "de": "Die Berichte nennen unterschiedliche Werte.", "nl": "De berichten noemen verschillende waarden."}.get(output_language, "The reports give conflicting values.")
+        # Let the live model order the verified sentences. Keeping the claim
+        # wording fixed prevents attaching a valid amount to a new claim.
+        if getattr(providers, "live", False):
+            sentences = "\n".join(approved)
             prompt = (
-                f"Write a concise paraphrase in language {output_language}. Lead with the first claim, "
-                "then cover every verified amount and unit in the given order. Keep each quantity attached "
-                "to its reported measure. Use only the evidence below. Add no numbers, including number words, "
-                "and do not copy full article sentences. "
-                f"Listener expertise: {expertise}; style: {profile.get('style', 'neutral')}\n"
-                f"{context_rows}\nConflicting reports: {conflicted}"
+                f"Arrange these verified narration sentences in language {output_language} as one paragraph. "
+                "Keep the introduction first and include every remaining sentence exactly once with its wording "
+                "unchanged. Add nothing. "
+                f"Listener expertise: {expertise}. Listener style: {style}.\n{sentences}"
             )
             candidate = providers.generate_script(prompt, output_language)
-            if _script_is_valid(candidate, facts, ordered_quantities, output_language):
-                text = candidate.strip()
+            if _script_is_valid(candidate, facts, approved):
+                text = " ".join(_script_sentences(candidate))
         if conflicted and conflict_text.lower() not in text.lower():
             text += " " + conflict_text
         result.append({"id": "segment-" + story["id"], "text": text, "fact_ids": ids, "sources": sources, "conflict": conflicted, "conflict_labels": list(dict.fromkeys(f.get("conflict_label") for f in facts if f.get("conflict_label")))})
+        if len(result) >= duration:
+            break
     return result
 
 
