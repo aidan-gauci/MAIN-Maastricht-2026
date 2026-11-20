@@ -1,6 +1,8 @@
-# The Liquid Briefing
+# Maze
 
-The Liquid Briefing turns prepared business news into personalized audio. Choose a listener, generate a briefing, and open any transcript segment to inspect its sources. The evidence and cost views support the hackathon demo.
+**Find your way through the news.** Maze turns prepared business news into short, personalized audio briefings. Every spoken figure is traced to its source. Choose a listener, generate a briefing, and open any transcript segment, or the Traces view, to follow each claim back to the reporting. The evidence and cost views support the hackathon demo.
+
+Internal names from the prototype (`LIQUID_*` environment variables, the `.liquid-data` folder, the `liquid-briefing-*` browser storage keys and the n8n workflow names) are unchanged, so existing setups and saved settings keep working.
 
 ## Run locally
 

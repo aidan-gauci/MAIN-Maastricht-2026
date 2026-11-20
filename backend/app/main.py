@@ -286,7 +286,7 @@ async def lifespan(app):
             local_timers.clear()
 
 
-app = FastAPI(title="The Liquid Briefing", lifespan=lifespan)
+app = FastAPI(title="Maze", description="Personal audio news briefings. Every figure traced to its source.", lifespan=lifespan)
 
 
 @app.get("/api/profiles")

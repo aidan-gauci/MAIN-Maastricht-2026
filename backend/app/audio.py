@@ -136,9 +136,13 @@ def create_audio(briefing, store, providers, mode):
         os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
         sorted(voice_settings(getattr(providers, "expressiveness", "balanced")).items()),
     ) if mode == "live" else ("offline",)
-    segments = briefing["segments"]
-    if not segments:
+    if not briefing["segments"]:
         raise ValueError("A briefing needs at least one audio segment")
+    # The voice announces each story by its headline; the transcript already shows it as a heading.
+    from .pipeline import spoken_text
+    headlines = {"segment-" + str(story.get("id")): story.get("title", "") for story in briefing.get("stories", [])}
+    segments = [dict(segment, text=spoken_text(segment, headlines.get(segment.get("id"), ""), language))
+                for segment in briefing["segments"]]
     clip_keys = [_audio_key(("segment-v1", mode, voice, language, segment)) for segment in segments]
     clips = [store.audio_dir / f"{key}.{extension}" for key in clip_keys]
     if len(clips) == 1:

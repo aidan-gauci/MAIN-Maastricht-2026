@@ -1488,6 +1488,37 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
     return result
 
 
+_INTRODUCTIONS = sorted({text for frame in _NARRATION_FRAMES.values() for text in frame.values()}, key=len, reverse=True)
+
+
+def _split_introduction(text: str) -> tuple[str, str]:
+    for introduction in _INTRODUCTIONS:
+        if text.startswith(introduction):
+            return introduction, text[len(introduction):].lstrip()
+    return "", text
+
+
+def introduce_once(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A briefing says its introduction once, at the start, rather than before every story."""
+    return [segment if index == 0 else {**segment, "text": _split_introduction(segment["text"])[1]}
+            for index, segment in enumerate(segments)]
+
+
+def spoken_text(segment: dict[str, Any], headline: str, language: str) -> str:
+    """What the voice reads for one story: any introduction, then the headline, then the figures.
+
+    The transcript shows each headline above its story, so only the audio adds it. Headlines come from
+    the source articles, which are mostly English, so they are announced only in English briefings.
+    """
+    introduction, body = _split_introduction(str(segment.get("text", "")))
+    headline = " ".join(str(headline or "").split())
+    if not headline or str(language).lower() != "en":
+        return str(segment.get("text", ""))
+    if headline[-1] not in ".?!":
+        headline += "."
+    return " ".join(part for part in (introduction, headline, body) if part)
+
+
 def evaluate(stories: list[dict[str, Any]], answer_key: dict[str, Any]) -> dict[str, Any]:
     """Compact fixture/data-quality evaluation against expected values."""
     all_facts = [f for story in stories for f in story.get("facts", [])]

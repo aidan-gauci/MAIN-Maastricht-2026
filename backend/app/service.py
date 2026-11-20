@@ -214,6 +214,7 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
         segments = narrate(selected, profile, Providers(MODE, store.record_usage, voice_preset))
     else:
         segments = select_summaries(selected, profile, summaries)
+    segments = pipeline.introduce_once(segments)
     if not segments:
         raise ValueError("No narration passed the evidence checks")
     used = {fact for segment in segments for fact in segment["fact_ids"]}
