@@ -13,6 +13,7 @@ from .service import generate_briefing, get_store, list_topics, prepare_corpus, 
 
 store = get_store()
 generation_lock = Lock()
+RETRY_WAIT_SECONDS = 5
 
 
 @asynccontextmanager
@@ -20,6 +21,10 @@ async def lifespan(app):
     store.initialize()
     if CORPUS == "fixture" and MODE == "demo" and not store.stories():
         prepare_corpus(store, read_articles(DEMO / "articles.jsonl"))
+    if not store.stories():
+        logging.getLogger(__name__).warning(
+            "No prepared news for LIQUID_MODE=%s LIQUID_CORPUS=%s; run `python -m backend.app import` first", MODE, CORPUS,
+        )
     yield
 
 
@@ -84,8 +89,14 @@ def briefing(briefing_id: str):
 
 @app.post("/api/briefings/{briefing_id}/audio")
 def retry_audio(briefing_id: str):
-    with generation_lock:
-        return render_audio(store, briefing(briefing_id))
+    current = briefing(briefing_id)
+    # Another narration is running; return the unchanged transcript so the listener can retry shortly.
+    if not generation_lock.acquire(timeout=RETRY_WAIT_SECONDS):
+        return current
+    try:
+        return render_audio(store, store.briefing(briefing_id) or current)
+    finally:
+        generation_lock.release()
 
 
 @app.get("/api/audio/{filename}")

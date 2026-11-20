@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import re
 from decimal import Decimal, InvalidOperation
@@ -9,6 +10,9 @@ from .config import CORPUS, DATA, DEMO, MODE
 from .importer import read_articles
 from .service import get_store, prepare_corpus, usage_report
 from .storage import Store
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
 def compare(stories, key):
@@ -49,20 +53,45 @@ def main():
     ingest.add_argument("--official", type=Path)
     ingest.add_argument("--limit", type=int)
     ingest.add_argument("--allow-provider-processing", action="store_true")
+    ingest.add_argument(
+        "--allow-offline-fallback", action="store_true",
+        help="In live mode, store heuristic clusters if provider extraction fails instead of keeping the previous corpus",
+    )
     evaluation = commands.add_parser("evaluate")
     evaluation.add_argument("answer_key", type=Path)
     commands.add_parser("costs")
     purge = commands.add_parser("purge-event")
     purge.add_argument("--confirm", action="store_true", required=True)
+    reset = commands.add_parser("reset-demo", help="Delete generated fixture data; the next start or import rebuilds it")
+    reset.add_argument("--confirm", action="store_true", required=True)
     args = parser.parse_args()
+    try:
+        run(parser, args)
+    except (OSError, RuntimeError, ValueError) as exc:
+        parser.exit(2, f"{parser.prog}: error: {exc}\n")
+
+
+def purge_corpus(corpus):
+    for mode in ("demo", "live"):
+        directory = DATA / corpus / mode
+        Store(directory / "briefings.sqlite3", directory / "audio").purge()
+    try:
+        (DATA / corpus).rmdir()
+    except OSError:
+        pass
+
+
+def run(parser, args):
     store = get_store()
     if args.command == "purge-event":
         if CORPUS != "event":
             parser.error("Set LIQUID_CORPUS=event before purging")
-        for mode in ("demo", "live"):
-            directory = DATA / "event" / mode
-            Store(directory / "briefings.sqlite3", directory / "audio").purge()
-        print("Purged app-managed event data")
+        purge_corpus("event")
+        print(f"Purged app-managed event data in {DATA}")
+        return
+    if args.command == "reset-demo":
+        purge_corpus("fixture")
+        print(f"Reset fictional fixture data in {DATA}")
         return
     if args.command == "import":
         if (args.path.resolve() != (DEMO / "articles.jsonl").resolve() or args.official) and CORPUS != "event":
@@ -78,7 +107,7 @@ def main():
         articles = read_articles(args.path, limit=args.limit)
         if args.official:
             articles += read_articles(args.official, official=True)
-        stories = prepare_corpus(store, articles)
+        stories = prepare_corpus(store, articles, allow_fallback=args.allow_offline_fallback or MODE != "live")
         print(json.dumps({"articles": len(articles), "stories": len(stories), "mode": MODE, "corpus": CORPUS}))
     elif args.command == "evaluate":
         report = compare(store.stories(), json.loads(args.answer_key.read_text(encoding="utf-8-sig")))

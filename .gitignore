@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .venv/
 .liquid-data/
 tmp/
@@ -10,3 +12,13 @@ dist/
 *.tsbuildinfo
 *.sqlite*
 *.zip
+
+# Licensed event data and derivatives stay out of Git. Only the fictional fixture is tracked.
+*.jsonl
+!backend/demo/*.jsonl
+__MACOSX/
+*.wav
+*.mp3
+*.local.json
+/data/
+/event/

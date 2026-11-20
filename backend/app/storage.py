@@ -78,8 +78,12 @@ class Store:
             rows = db.execute("SELECT payload FROM stories ORDER BY story_id").fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
-    def replace_corpus(self, articles: Iterable[dict[str, Any]], stories: Iterable[dict[str, Any]]) -> None:
-        """Replace the corpus as one transaction; article bodies are intentionally discarded."""
+    def replace_corpus(self, articles: Iterable[dict[str, Any]], stories: Iterable[dict[str, Any]], *, clear_preparation_usage_through: int | None = None) -> None:
+        """Replace the corpus as one transaction; article bodies are intentionally discarded.
+
+        When ``clear_preparation_usage_through`` is given, preparation usage rows up to that id
+        (earlier imports) are removed so preparation cost always describes the loaded corpus.
+        """
         article_rows = []
         for n, item in enumerate(articles):
             article_rows.append((
@@ -98,6 +102,12 @@ class Store:
             db.execute("DELETE FROM stories")
             db.executemany("INSERT INTO articles(article_id,title,source,publication_date,language,url,official) VALUES(?,?,?,?,?,?,?)", article_rows)
             db.executemany("INSERT INTO stories(story_id,payload) VALUES(?,?)", story_rows)
+            if clear_preparation_usage_through is not None:
+                db.execute("DELETE FROM usage WHERE stage IN ('ingestion','story_extraction') AND id<=?", (clear_preparation_usage_through,))
+
+    def usage_watermark(self) -> int:
+        with self._connect() as db:
+            return db.execute("SELECT COALESCE(MAX(id),0) FROM usage").fetchone()[0]
 
     def save_briefing(self, briefing: dict[str, Any]) -> None:
         briefing_id = self._identifier(briefing, ("briefing_id", "id"), "latest")
@@ -127,14 +137,23 @@ class Store:
         return [dict(row) for row in rows]
 
     def purge(self) -> None:
-        """Remove the database and known generated audio files, without traversing arbitrary trees."""
-        for candidate in (self.path, Path(str(self.path) + "-wal"), Path(str(self.path) + "-shm")):
+        """Remove the database and known generated audio files, without traversing arbitrary trees.
+
+        Safe to repeat. Raises ``RuntimeError`` when a running backend still holds the files.
+        """
+        try:
+            # Audio is app-owned; delete regular files only and leave unexpected subdirectories intact.
+            if self.audio_dir.is_dir():
+                for candidate in self.audio_dir.iterdir():
+                    if candidate.is_file() and candidate.suffix.lower() in {".mp3", ".wav", ".ogg", ".m4a", ".tmp"}:
+                        candidate.unlink()
+            for candidate in (self.path, Path(str(self.path) + "-wal"), Path(str(self.path) + "-shm"), Path(str(self.path) + "-journal")):
+                candidate.unlink(missing_ok=True)
+        except PermissionError:
+            raise RuntimeError(f"Could not delete files in {self.path.parent}. Stop the backend and run the command again") from None
+        # Remove the folders the app created once they are empty; anything else is left in place.
+        for directory in (self.audio_dir, self.path.parent):
             try:
-                candidate.unlink()
-            except FileNotFoundError:
+                directory.rmdir()
+            except OSError:
                 pass
-        # Audio is app-owned; delete regular files only and leave unexpected subdirectories intact.
-        if self.audio_dir.exists() and self.audio_dir.is_dir():
-            for candidate in self.audio_dir.iterdir():
-                if candidate.is_file() and candidate.suffix.lower() in {".mp3", ".wav", ".ogg", ".m4a", ".tmp"}:
-                    candidate.unlink()

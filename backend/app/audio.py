@@ -20,7 +20,23 @@ def offline_voice(text, path):
         env = {**os.environ, "LIQUID_VOICE_OUTPUT": str(path)}
     else:
         raise RuntimeError("Install eSpeak NG for offline narration")
-    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=90)
+    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=speech_timeout())
+
+
+def speech_timeout():
+    """Seconds one narration may take before the briefing falls back to transcript-only."""
+    try:
+        return max(5.0, float(os.environ.get("LIQUID_SPEECH_TIMEOUT_SECONDS", "60")))
+    except ValueError:
+        return 60.0
+
+
+def audio_file(store, audio_url):
+    """Return the local file behind an /api/audio URL, or None when it is missing."""
+    if not audio_url:
+        return None
+    path = Path(store.audio_dir) / str(audio_url).rsplit("/", 1)[-1]
+    return path if path.is_file() else None
 
 
 def create_audio(briefing, store, providers, mode):
@@ -33,10 +49,12 @@ def create_audio(briefing, store, providers, mode):
             providers.synthesize(text, temporary, briefing["language"])
         else:
             offline_voice(text, temporary)
-            store.record_usage("speech_generation", mode="demo", characters=len(text), estimated_usd=0)
         if not temporary.is_file() or temporary.stat().st_size <= 44:
             raise RuntimeError("Empty audio")
         temporary.replace(target)
+        if mode != "live":
+            # Count only narrations that produced playable audio (live usage is recorded by the provider).
+            store.record_usage("speech_generation", mode=mode, characters=len(text), estimated_usd=0)
     finally:
         temporary.unlink(missing_ok=True)
     return f"/api/audio/{target.name}"
