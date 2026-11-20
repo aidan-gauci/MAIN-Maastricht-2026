@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AudioLines, BadgeCheck, BookOpen, Check, ChevronDown, CircleHelp, Clock3, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, Waves, X } from 'lucide-react';
+import { AudioLines, BadgeCheck, BookOpen, Check, ChevronDown, CircleHelp, Clock3, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, Waves, Waypoints, X } from 'lucide-react';
+import { TracesView, type TraceFocus } from './traces';
 
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
 type Source = { article_id: string; title: string; source: string; url: string };
@@ -79,7 +80,8 @@ export default function App() {
   const [audioError, setAudioError] = useState('');
   const [failedPlayback, setFailedPlayback] = useState(false);
   const [audioRetryTime, setAudioRetryTime] = useState<number | null>(null);
-  const [tab, setTab] = useState<'listen' | 'evidence' | 'costs'>('listen');
+  const [tab, setTab] = useState<'listen' | 'evidence' | 'traces' | 'costs'>('listen');
+  const [traceFocus, setTraceFocus] = useState<TraceFocus | null>(null);
   const [playing, setPlaying] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -110,6 +112,9 @@ export default function App() {
   const focusEvidence = useRef(false);
   const inspectButton = useRef<HTMLButtonElement | null>(null);
   const returnToStory = useRef(false);
+  const traceButton = useRef<HTMLButtonElement | null>(null);
+  const returnToTrace = useRef(false);
+  const traceRequests = useRef(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -214,6 +219,10 @@ export default function App() {
       inspectButton.current?.focus();
       returnToStory.current = false;
     }
+    if (tab === 'listen' && returnToTrace.current) {
+      traceButton.current?.focus();
+      returnToTrace.current = false;
+    }
   }, [tab, evidenceStoryId]);
 
   const activeProfile = profiles.find(profile => profile.id === profileId);
@@ -234,7 +243,15 @@ export default function App() {
 
   function changeView(view: typeof tab) {
     if (view !== 'listen') audio.current?.pause();
+    if (view !== 'traces') setTraceFocus(null);
     setTab(view);
+  }
+
+  function inspectTrace(segmentId: string, button: HTMLButtonElement) {
+    traceButton.current = button;
+    traceRequests.current += 1;
+    setTraceFocus({ segmentId, nonce: traceRequests.current });
+    changeView('traces');
   }
 
   function inspectEvidence(storyId: string, button: HTMLButtonElement) {
@@ -255,6 +272,8 @@ export default function App() {
       setBriefingSettings(settingsKey);
       setEvidenceStoryId(null);
       inspectButton.current = null;
+      setTraceFocus(null);
+      traceButton.current = null;
       setTab('listen');
       setExpanded(null);
       setPlaying(false);
@@ -413,6 +432,7 @@ export default function App() {
             <nav className="tabs-left" aria-label="Briefing views">
               <button aria-pressed={tab === 'listen'} className={tab === 'listen' ? 'content-tab active' : 'content-tab'} onClick={() => changeView('listen')}><Headphones size={15}/> Listen</button>
               <button aria-pressed={tab === 'evidence'} className={tab === 'evidence' ? 'content-tab active' : 'content-tab'} onClick={() => changeView('evidence')}><BookOpen size={15}/> Evidence</button>
+              <button aria-pressed={tab === 'traces'} className={tab === 'traces' ? 'content-tab active' : 'content-tab'} onClick={() => changeView('traces')}><Waypoints size={15}/> Traces</button>
               <button aria-pressed={tab === 'costs'} className={tab === 'costs' ? 'content-tab active' : 'content-tab'} onClick={() => changeView('costs')}><Info size={15}/> Costs</button>
             </nav>
           </div>
@@ -424,7 +444,7 @@ export default function App() {
                 onPlaybackChange={setPlaying} onAudioError={() => { setFailedPlayback(true); setPlaying(false); }}
                 audioRetryTime={audioRetryTime} failedPlayback={failedPlayback} audioError={audioError} expanded={expanded} onExpand={setExpanded}
                 onRetry={retryAudio} busy={Boolean(action)} retrying={action === 'audio'} evidence={evidence}
-                onInspectEvidence={inspectEvidence}
+                onInspectEvidence={inspectEvidence} onTrace={inspectTrace}
                 ratings={ratings} ratingBusy={ratingBusy} onRate={rateStory}/> :
               <div className="empty-state"><div className="sound-art" aria-hidden="true"><div/><div/><div/><AudioLines size={31}/></div><h2>No briefing yet</h2><p>Choose a profile or topics, then create your first audio briefing.</p></div>}
           </div>
@@ -435,6 +455,12 @@ export default function App() {
               onReturnToStory={() => { returnToStory.current = true; changeView('listen'); }}
               onRetry={() => { setEvidenceError(''); setEvidenceLoading(true); setEvidenceRequest(value => value + 1); }}/>
           </div>
+          <div hidden={tab !== 'traces'}>
+            <TracesView briefing={briefing} evidence={evidence} available={!briefing || availableNow(briefing)} availableAt={briefing?.available_at}
+              loading={evidenceLoading} error={evidenceError} focus={traceFocus}
+              onReturn={() => { returnToTrace.current = true; changeView('listen'); }}
+              onRetry={() => { setEvidenceError(''); setEvidenceLoading(true); setEvidenceRequest(value => value + 1); }}/>
+          </div>
           {tab === 'costs' && <CostsView costs={costs} loading={costsLoading}/>}
         </section>
       </div>
@@ -443,7 +469,7 @@ export default function App() {
   </div>;
 }
 
-function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChange, onAudioError, audioRetryTime, failedPlayback, audioError, expanded, onExpand, onRetry, busy, retrying, evidence, onInspectEvidence, ratings, ratingBusy, onRate }: {
+function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChange, onAudioError, audioRetryTime, failedPlayback, audioError, expanded, onExpand, onRetry, busy, retrying, evidence, onInspectEvidence, onTrace, ratings, ratingBusy, onRate }: {
   briefing: Briefing;
   headingRef: RefObject<HTMLHeadingElement>;
   playing: boolean;
@@ -460,6 +486,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
   retrying: boolean;
   evidence: Evidence[];
   onInspectEvidence: (storyId: string, button: HTMLButtonElement) => void;
+  onTrace: (segmentId: string, button: HTMLButtonElement) => void;
   ratings: Record<string, 'up' | 'down'>;
   ratingBusy: string | null;
   onRate: (storyId: string, rating: 'up' | 'down') => void;
@@ -512,10 +539,15 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
             <div className="transcript">
               {segments.map(segment => <div className="transcript-segment" key={segment.id}>
                 <p>{segment.text}{segment.conflict && <span className="conflict-flag"><Info size={12}/> Conflicting reports</span>}</p>
-                {available && <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>
-                  <BookOpen size={13}/>{segment.sources.length} {segment.sources.length === 1 ? 'source' : 'sources'}
-                  <ChevronDown size={13} className={expanded === segment.id ? 'rotated' : ''}/>
-                </button>}
+                {available && <div className="segment-actions">
+                  <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>
+                    <BookOpen size={13}/>{segment.sources.length} {segment.sources.length === 1 ? 'source' : 'sources'}
+                    <ChevronDown size={13} className={expanded === segment.id ? 'rotated' : ''}/>
+                  </button>
+                  <button className="source-toggle trace-link" aria-label={`Trace the claims in this segment of ${story.title} to their sources`} onClick={event => onTrace(segment.id, event.currentTarget)}>
+                    <Waypoints size={13}/> Trace claims
+                  </button>
+                </div>}
                 {available && expanded === segment.id && <div className="source-list">
                   {segment.sources.map(src => <a key={src.article_id} href={src.url} target="_blank" rel="noreferrer">
                     <span>{src.source}</span><strong>{src.title}</strong><span className="source-out">↗</span>
