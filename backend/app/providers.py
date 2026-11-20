@@ -12,12 +12,27 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+class ExtractionOutputError(ValueError):
+    """The provider answered, but the reply is unusable: truncated at the token cap or not valid JSON.
+
+    Unlike an authentication, connection, or quota failure, this depends on the batch contents, so the
+    caller may retry smaller batches. It never sets ``Providers.extraction_failed``.
+    """
+
+
+# Only these are retried on smaller batches; every other extraction error is a provider failure.
+RECOVERABLE_EXTRACTION_ERRORS = (ExtractionOutputError, json.JSONDecodeError)
+
+
 class Providers:
     def __init__(self, mode: str = "offline", record_usage: Callable[..., None] | None = None, voice_preset: str = "default"):
         self.mode = mode.lower()
         self.record_usage = record_usage or (lambda *args, **kwargs: None)
-        # Set when live extraction raised; preparation then falls back to the local heuristic.
+        # Set when live extraction raised a provider failure (auth, network, quota, bad configuration);
+        # preparation then falls back to the local heuristic. Unusable replies are recovered per batch.
         self.extraction_failed = False
+        # Articles whose provider reply stayed unusable and were extracted with the local heuristic.
+        self.heuristic_fallback_articles = 0
         self.voice_preset = voice_preset
 
     @staticmethod
@@ -83,6 +98,8 @@ class Providers:
             return {}
         try:
             return self._extract(articles)
+        except RECOVERABLE_EXTRACTION_ERRORS:
+            raise  # the caller splits the batch; this is not a provider outage
         except Exception as exc:
             self.extraction_failed = True
             logging.getLogger(__name__).warning("Live extraction failed (%s)", type(exc).__name__)
@@ -110,7 +127,17 @@ class Providers:
         usage = getattr(response, "usage", None)
         in_tokens, out_tokens = getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0
         self.record_usage("story_extraction", mode=self.mode, input_tokens=in_tokens, output_tokens=out_tokens, estimated_usd=self._usd(input_tokens=in_tokens, output_tokens=out_tokens))
-        return json.loads(response.choices[0].message.content or "{}")
+        # Usage is recorded above, so billed calls with an unusable reply still count.
+        choice = response.choices[0]
+        if getattr(choice, "finish_reason", None) == "length":
+            raise ExtractionOutputError("Provider extraction reply was truncated at the output-token limit")
+        try:
+            data = json.loads(choice.message.content or "{}")
+        except json.JSONDecodeError as exc:
+            raise ExtractionOutputError("Provider extraction reply was not valid JSON") from exc
+        if not isinstance(data, dict):
+            raise ExtractionOutputError("Provider extraction reply was not a JSON object")
+        return data
 
     def generate_script(self, prompt: str, language: str = "en") -> str:
         """Return a live draft, or "" so the caller keeps its deterministic verified narration."""

@@ -107,8 +107,12 @@ def run(parser, args):
         articles = read_articles(args.path, limit=args.limit)
         if args.official:
             articles += read_articles(args.official, official=True)
-        stories = prepare_corpus(store, articles, allow_fallback=args.allow_offline_fallback or MODE != "live")
-        print(json.dumps({"articles": len(articles), "stories": len(stories), "mode": MODE, "corpus": CORPUS}))
+        report = {}
+        stories = prepare_corpus(store, articles, allow_fallback=args.allow_offline_fallback or MODE != "live", report=report)
+        summary = {"articles": len(articles), "stories": len(stories), "mode": MODE, "corpus": CORPUS}
+        if MODE == "live":
+            summary["heuristic_fallback_articles"] = report.get("heuristic_fallback_articles", 0)
+        print(json.dumps(summary))
     elif args.command == "evaluate":
         report = compare(store.stories(), json.loads(args.answer_key.read_text(encoding="utf-8-sig")))
         print(json.dumps(report, indent=2))

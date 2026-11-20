@@ -126,11 +126,12 @@ def get_providers(store, *, record_usage=None):
     return Providers(MODE, record_usage or store.record_usage)
 
 
-def prepare_corpus(store, articles, *, allow_fallback=True):
+def prepare_corpus(store, articles, *, allow_fallback=True, report=None):
     """Prepare and store a corpus; on any error the previously imported corpus is kept.
 
     With ``allow_fallback=False`` a failed live extraction aborts instead of silently storing
-    the local heuristic clusters.
+    the local heuristic clusters. A provider reply that stays unusable for a single article is not
+    a failure: that article uses the heuristic and is counted in ``report["heuristic_fallback_articles"]``.
     """
     if not articles:
         raise ValueError("Import requires at least one article")
@@ -159,6 +160,9 @@ def prepare_corpus(store, articles, *, allow_fallback=True):
                 if article.get(key):
                     source[key] = article[key]
     store.replace_corpus(articles, stories, prepare_summaries(stories), preparation_usage=usage)
+    if report is not None:
+        count = getattr(providers, "heuristic_fallback_articles", 0)
+        report["heuristic_fallback_articles"] = count if isinstance(count, int) else 0
     return stories
 
 
