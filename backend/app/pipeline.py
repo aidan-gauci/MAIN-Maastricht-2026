@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import unicodedata
@@ -17,6 +18,9 @@ from typing import Any, NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from .clustering import group_articles
+from .providers import RECOVERABLE_EXTRACTION_ERRORS
+
+_LOG = logging.getLogger(__name__)
 
 
 def fixture_articles() -> list[dict[str, Any]]:
@@ -567,31 +571,64 @@ def _offline_extract(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return stories
 
 
+def _extract_batch(providers: Any, batch: list[dict[str, Any]], heuristic_ids: set[str]) -> list[dict[str, Any]]:
+    """Extract one batch; a truncated or invalid reply is retried as two halves, down to single articles.
+
+    A single article that still fails is added to ``heuristic_ids`` for local extraction. Any other
+    provider error (authentication, connection, quota) propagates unchanged and aborts the run.
+    """
+    try:
+        return (providers.extract(batch) or {}).get("stories", [])
+    except RECOVERABLE_EXTRACTION_ERRORS as exc:
+        if len(batch) == 1:
+            _LOG.warning("Live extraction reply unusable for 1 article (%s); using the local heuristic for it",
+                         type(exc).__name__)
+            heuristic_ids.add(str(batch[0].get("article_id", "")))
+            return []
+        middle = len(batch) // 2
+        _LOG.warning("Live extraction reply unusable for a batch of %d articles (%s); retrying as %d + %d",
+                     len(batch), type(exc).__name__, middle, len(batch) - middle)
+        return _extract_batch(providers, batch[:middle], heuristic_ids) + _extract_batch(providers, batch[middle:], heuristic_ids)
+
+
+def _note_heuristic_articles(providers: Any, count: int) -> None:
+    """Let the import report how many articles used the local heuristic instead of the provider."""
+    if getattr(providers, "live", False):
+        try:
+            providers.heuristic_fallback_articles = count
+        except AttributeError:
+            pass
+
+
 def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, Any]]:
     """Convert article records to story records while preserving source links."""
     if not articles:
         return []
     extracted: dict[str, Any] = {}
+    heuristic_ids: set[str] = set()
     if getattr(providers, "live", False):
         groups = group_articles(articles, _group_key, _day)
         extracted_stories = []
         try:
             for batch in _provider_batches(groups):
-                result = providers.extract(batch) or {}
-                extracted_stories.extend(result.get("stories", []))
+                extracted_stories.extend(_extract_batch(providers, batch, heuristic_ids))
         except Exception:
             # Keep the corpus usable if an opted-in provider call fails midway;
             # local extraction still enforces evidence and numeric provenance.
+            _note_heuristic_articles(providers, len(articles))
             return _offline_extract(articles)
         extracted = {"stories": extracted_stories}
     if not extracted.get("stories"):
+        _note_heuristic_articles(providers, len(articles))
         return _offline_extract(articles)
+    _note_heuristic_articles(providers, len(heuristic_ids))
     # A live model proposes clusters, but only exact source evidence and
     # quantities found in that article are allowed into the prepared corpus.
     by_id = {str(a.get("article_id")): a for a in articles}
     members_by_article = {}
     for group in group_articles(articles, _group_key, _day):
-        member_ids = {str(article.get("article_id", "")) for article in group}
+        # Articles that fell back to the heuristic become their own stories below.
+        member_ids = {str(article.get("article_id", "")) for article in group} - heuristic_ids
         for article_id in member_ids:
             members_by_article[article_id] = member_ids
     clustered: dict[str, dict[str, Any]] = {}
@@ -653,7 +690,15 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
     # with the claims so narration and evidence views can surface it.
     for story in stories:
         story["conflicts"] = _label_conflicts(story["facts"])
-    return stories or _offline_extract(articles)
+    if not stories:
+        _note_heuristic_articles(providers, len(articles))
+        return _offline_extract(articles)
+    if heuristic_ids:
+        # Same local extraction and provenance rules as the offline path, for just these articles.
+        known = {story["id"] for story in stories}
+        stories.extend(story for story in _offline_extract([a for a in articles if str(a.get("article_id")) in heuristic_ids])
+                       if story["id"] not in known)
+    return stories
 
 
 def _profile_names(profile: dict[str, Any]) -> dict[str, str]:

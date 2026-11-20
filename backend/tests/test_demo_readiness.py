@@ -220,9 +220,12 @@ class CostSeparationTest(StoreTestCase):
                 choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
             )
 
+        # Malformed JSON is now recovered per batch (see test_live_extraction_recovery), so the billable
+        # failure here is a reply without any choice, which is not a recoverable output error.
+        unusable = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=2_000_000, completion_tokens=0), choices=[])
         create = Mock(side_effect=[
             response(1_000_000, '{"stories": []}'),
-            response(2_000_000, 'malformed JSON after a billable provider call'),
+            unusable,
             response(3_000_000, '{"stories": []}'),
         ])
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
