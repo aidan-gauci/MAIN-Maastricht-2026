@@ -231,7 +231,6 @@ export function TracesView({ briefing, evidence, available, availableAt, loading
 
   return <div className="data-view trace-view">
     <div className="data-heading">
-      <span className="step-label">LINKED TRACES</span>
       <h2>Every claim, linked to its source.</h2>
       <p>Follow each spoken figure to the facts extracted from the reporting, and on to the articles they came from.</p>
     </div>
@@ -270,9 +269,9 @@ export function TracesView({ briefing, evidence, available, availableAt, loading
               <h3>
                 <button ref={element => { headers.current[segment.id] = element; }} className="trace-segment-toggle" aria-expanded={isOpen} aria-controls={isOpen ? panel : undefined} onClick={() => toggle(segment.id)}>
                   <span className="trace-segment-title">
-                    <span className="evidence-count">SPOKEN SEGMENT {segment.index + 1}</span>
+                    <span className="evidence-count">Spoken segment {segment.index + 1}</span>
                     <strong>{segment.title}</strong>
-                    <span className="trace-segment-meta">{plural(segment.claims.length, 'figure')} · {plural(segment.factCount, 'fact')} · {plural(segment.sources.length, 'source')}{segment.languages.length > 1 ? ` in ${segment.languages.map(languageName).join(', ')}` : ''}</span>
+                    <span className="trace-segment-meta"><span>{plural(segment.claims.length, 'figure')}</span><span>{plural(segment.factCount, 'fact')}</span><span>{plural(segment.sources.length, 'source')}{segment.languages.length > 1 ? ` in ${segment.languages.map(languageName).join(', ')}` : ''}</span></span>
                   </span>
                   <span className="trace-segment-chips">
                     {segment.conflictCount > 0 && <span className="trace-chip warn"><TriangleAlert size={13} aria-hidden="true"/>Conflict flagged</span>}
