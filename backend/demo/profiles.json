@@ -1,0 +1,24 @@
+[
+  {
+    "id": "everyday",
+    "name": "Everyday Economics Listener",
+    "description": "Understand how economic news affects household budgets, jobs, and everyday prices.",
+    "topic_weights": {"inflation": 1, "housing": 1, "jobs": 0.9, "rates": 0.8, "energy": 0.5},
+    "excluded_topics": [],
+    "expertise": "beginner",
+    "language": "en",
+    "duration": 3,
+    "style": "Use plain language and connect the story to household budgets"
+  },
+  {
+    "id": "markets",
+    "name": "Business and Markets Professional",
+    "description": "Catch up on market drivers, companies, monetary policy, and trade.",
+    "topic_weights": {"markets": 1, "earnings": 1, "rates": 0.9, "trade": 0.9, "technology": 0.8, "energy": 0.6},
+    "excluded_topics": [],
+    "expertise": "advanced",
+    "language": "en",
+    "duration": 5,
+    "style": "Lead with the signal and explain economic and market implications"
+  }
+]

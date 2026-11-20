@@ -1,0 +1,19 @@
+{
+  "stories": [
+    {
+      "label": "Harborland growth forecast",
+      "article_ids": ["a01-en", "a09-de", "a10-nl"],
+      "values": [1.4, 1.8]
+    },
+    {
+      "label": "Bellmare interest rate decision",
+      "article_ids": ["a02-en", "a11-de", "a12-nl"],
+      "values": [3.25]
+    },
+    {
+      "label": "Factory grant job estimates",
+      "article_ids": ["a04-en"],
+      "values": [12400, 14100]
+    }
+  ]
+}
