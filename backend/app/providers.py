@@ -6,6 +6,7 @@ require both credentials and an explicit raw-content opt-in.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,8 @@ class Providers:
     def __init__(self, mode: str = "offline", record_usage: Callable[..., None] | None = None):
         self.mode = mode.lower()
         self.record_usage = record_usage or (lambda *args, **kwargs: None)
+        # Set when live extraction raised; preparation then falls back to the local heuristic.
+        self.extraction_failed = False
 
     @staticmethod
     def _usd(input_tokens: int = 0, output_tokens: int = 0, characters: int = 0, prefix: str = "OPENAI") -> float | None:
@@ -50,7 +53,8 @@ class Providers:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         return OpenAI()
 
-    def embed(self, texts: list[str], stage: str = "ingestion") -> list[list[float]]:
+    def embed(self, texts: list[str], *, stage: str) -> list[list[float]]:
+        """Callers name the stage so briefing-time calls never count as preparation."""
         if not texts:
             return []
         if not self.live:
@@ -76,9 +80,17 @@ class Providers:
         """Extract sourced facts from one bounded, explicitly opted-in batch."""
         if not self.live:
             return {}
+        try:
+            return self._extract(articles)
+        except Exception as exc:
+            self.extraction_failed = True
+            logging.getLogger(__name__).warning("Live extraction failed (%s)", type(exc).__name__)
+            raise
+
+    def _extract(self, articles: list[dict[str, Any]]) -> dict[str, Any]:
         client = self._client()
         model = os.getenv("OPENAI_SMALL_MODEL", "gpt-4o-mini")
-        payload = [{k: a.get(k) for k in ("article_id", "title", "source", "publication_date", "language", "body", "url")} for a in articles]
+        payload =[{k: a.get(k) for k in ("article_id", "title", "source", "publication_date", "language", "body", "url")} for a in articles]
         payload_text = json.dumps(payload, ensure_ascii=False)
         max_chars = max(4000, int(os.getenv("LIQUID_LIVE_BATCH_CHARS", "48000")))
         if len(payload_text) > max_chars:
@@ -100,8 +112,16 @@ class Providers:
         return json.loads(response.choices[0].message.content or "{}")
 
     def generate_script(self, prompt: str, language: str = "en") -> str:
+        """Return a live draft, or "" so the caller keeps its deterministic verified narration."""
         if not self.live:
             return ""
+        try:
+            return self._generate_script(prompt, language)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Script generation failed; using verified template (%s)", type(exc).__name__)
+            return ""
+
+    def _generate_script(self, prompt: str, language: str) -> str:
         client = self._client()
         model = os.getenv("OPENAI_SMALL_MODEL", "gpt-4o-mini")
         response = client.chat.completions.create(
@@ -132,7 +152,8 @@ class Providers:
             from elevenlabs import ElevenLabs
         except ImportError as exc:
             raise RuntimeError("Install the elevenlabs package to use live speech") from exc
-        client = ElevenLabs(api_key=api_key)
+        from .audio import speech_timeout
+        client = ElevenLabs(api_key=api_key, timeout=speech_timeout())
         audio = client.text_to_speech.convert(text=text, voice_id=voice_id, model_id=os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), output_format="mp3_44100_128")
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)

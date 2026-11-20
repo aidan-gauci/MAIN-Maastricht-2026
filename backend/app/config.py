@@ -9,10 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, mod
 ROOT = Path(__file__).resolve().parents[2]
 DEMO = ROOT / "backend" / "demo"
 DATA = Path(os.environ.get("LIQUID_DATA_DIR", ROOT / ".liquid-data")).resolve()
-MODE = os.environ.get("LIQUID_MODE", "demo")
+MODE = os.environ.get("LIQUID_MODE", "demo").strip().lower() or "demo"
 if MODE not in {"demo", "live"}:
     raise ValueError("LIQUID_MODE must be demo or live")
-CORPUS = os.environ.get("LIQUID_CORPUS", "fixture")
+CORPUS = os.environ.get("LIQUID_CORPUS", "fixture").strip().lower() or "fixture"
 if CORPUS not in {"fixture", "event"}:
     raise ValueError("LIQUID_CORPUS must be fixture or event")
 

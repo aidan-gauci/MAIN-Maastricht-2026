@@ -2,17 +2,23 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from threading import Lock
+from weakref import WeakValueDictionary
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .audio import audio_file
 from .config import CORPUS, DEMO, MODE, ROOT, BriefingRequest, load_profiles, supported_languages
 from .importer import read_articles
-from .service import generate_briefing, get_store, list_topics, prepare_corpus, render_audio, usage_report, wildcard_profile
+from .service import (
+    generate_briefing, get_store, prepare_corpus, recommendation_topics, render_audio, usage_report, wildcard_profile,
+)
 
 store = get_store()
-generation_lock = Lock()
+retry_locks = WeakValueDictionary()
+retry_locks_guard = Lock()
+RETRY_WAIT_SECONDS = 5
 
 
 @asynccontextmanager
@@ -20,6 +26,11 @@ async def lifespan(app):
     store.initialize()
     if CORPUS == "fixture" and MODE == "demo" and not store.stories():
         prepare_corpus(store, read_articles(DEMO / "articles.jsonl"))
+    if not store.stories():
+        logging.getLogger(__name__).warning(
+            "No prepared news for LIQUID_MODE=%s LIQUID_CORPUS=%s; run `python -m backend.app import` first", MODE, CORPUS,
+        )
+    recommendation_topics(store)
     yield
 
 
@@ -33,7 +44,7 @@ def profiles():
 
 @app.get("/api/topics")
 def topics():
-    return list_topics(store.stories())
+    return recommendation_topics(store)
 
 
 @app.get("/api/languages")
@@ -65,8 +76,7 @@ def create_briefing(request: BriefingRequest):
     if profile["language"] not in supported_languages():
         raise HTTPException(422, "This output language has not been enabled")
     try:
-        with generation_lock:
-            return generate_briefing(store, profile)
+        return generate_briefing(store, profile)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
@@ -82,10 +92,24 @@ def briefing(briefing_id: str):
     return result
 
 
+def _retry_lock(briefing_id):
+    with retry_locks_guard:
+        return retry_locks.setdefault(briefing_id, Lock())
+
+
 @app.post("/api/briefings/{briefing_id}/audio")
 def retry_audio(briefing_id: str):
-    with generation_lock:
+    briefing(briefing_id)
+    retry_lock = _retry_lock(briefing_id)
+    if not retry_lock.acquire(timeout=RETRY_WAIT_SECONDS):
+        current = briefing(briefing_id)
+        if current.get("audio_url") and not audio_file(store, current["audio_url"]):
+            return {**current, "audio_url": None, "audio_status": "pending"}
+        return current
+    try:
         return render_audio(store, briefing(briefing_id))
+    finally:
+        retry_lock.release()
 
 
 @app.get("/api/audio/{filename}")
