@@ -312,6 +312,10 @@ def usage_report(store, mode=None):
             row["estimated_usd"] = Providers._usd(
                 row["input_tokens"], row["output_tokens"], row["characters"], prefix=RATE_PREFIX.get(stage, "OPENAI"),
             )
+            if stage == "script_generation":
+                # Narration may use a pricier model; prefer its own rates, as recording does.
+                script = Providers._usd(row["input_tokens"], row["output_tokens"], prefix="OPENAI_SCRIPT")
+                row["estimated_usd"] = script if script is not None else row["estimated_usd"]
         else:
             row["estimated_usd"] = 0.0
         stages.append(row)

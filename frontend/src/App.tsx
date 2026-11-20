@@ -6,7 +6,7 @@ type Profile = { id: string; name: string; description: string; topic_weights?: 
 type Source = { article_id: string; title: string; source: string; url: string };
 type Story = { id: string; title: string; reason: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
-type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null };
+type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
 type VoicePreset = { id: string; label: string };
 type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
 type ScheduleDraft = Omit<Schedule, 'schedule_id' | 'schedule_version' | 'generation_at' | 'delivery_at' | 'dispatch_status'>;
@@ -508,7 +508,10 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
     </div>
     <div className="briefing-title-row">
       <div><span className="step-label">YOUR PERSONAL BRIEFING</span><h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>Today, in context.</h2></div>
-      <span className="duration-pill">{storyCount} {storyCount === 1 ? 'story' : 'stories'}</span>
+      <span className="duration-pill" title={briefing.requested_minutes ? `You asked for about ${briefing.requested_minutes} minutes. Length depends on how many verified figures the reporting contains.` : undefined}>
+        {storyCount} {storyCount === 1 ? 'story' : 'stories'}
+        {typeof briefing.estimated_seconds === 'number' && <> · {briefing.estimated_seconds < 60 ? 'under 1 min' : `about ${Math.round(briefing.estimated_seconds / 60)} min`}</>}
+      </span>
     </div>
     <div className={ready ? 'player ready' : 'player'}>
       <div className="player-info">

@@ -291,6 +291,17 @@ class CostSeparationTest(StoreTestCase):
         self.assertAlmostEqual(0.90, report["stages"][3]["estimated_usd"])
         self.assertAlmostEqual(0.30, report["per_briefing_usd"])
 
+    def test_script_stage_uses_narration_rates_when_set(self):
+        self.store.record_usage("script_generation", mode="live", input_tokens=1_000_000, output_tokens=1_000_000)
+        rates = {"OPENAI_INPUT_USD_PER_MILLION_TOKENS": "0.15", "OPENAI_OUTPUT_USD_PER_MILLION_TOKENS": "0.60"}
+        with patch.dict(os.environ, rates):
+            self.assertAlmostEqual(0.75, usage_report(self.store, mode="live")["stages"][2]["estimated_usd"])
+        with patch.dict(os.environ, {**rates, "OPENAI_SCRIPT_INPUT_USD_PER_MILLION_TOKENS": "2.00",
+                                     "OPENAI_SCRIPT_OUTPUT_USD_PER_MILLION_TOKENS": "8.00"}):
+            report = usage_report(self.store, mode="live")
+        self.assertEqual("script_generation", report["stages"][2]["stage"])
+        self.assertAlmostEqual(10.00, report["stages"][2]["estimated_usd"])
+
     def test_briefing_usage_is_separate_from_preparation(self):
         with patch.dict(os.environ, self.RATES):
             self.prepare_with_usage(1_000_000)
