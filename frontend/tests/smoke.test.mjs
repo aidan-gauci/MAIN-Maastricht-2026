@@ -132,7 +132,7 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   await page.getByRole('button', { name: 'Listen', exact: true }).click();
 
   const assemblyFailure = join(dataDirectory, 'fail-assembly');
-  await rm(join(dataDirectory, 'fixture', 'demo', 'audio', basename(briefing.audio_url)));
+  await rm(join(dataDirectory, 'fixture', 'demo', 'audio', basename(briefing.audio_url.split('?')[0])));
   await writeFile(assemblyFailure, '');
   // Seek via a fresh media request so Chromium cannot serve buffered playback.
   await narration.evaluate(player => {
@@ -156,7 +156,7 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   assert.equal(recovered.audio_url, briefing.audio_url);
   assert.equal(recovered.audio_status, 'ready');
   await page.waitForFunction(() => document.querySelector('audio')?.readyState >= HTMLMediaElement.HAVE_METADATA);
-  assert.match(await narration.getAttribute('src'), /\?retry=\d+$/);
+  assert.match(await narration.getAttribute('src'), /[?&]retry=\d+$/);
   assert.equal(await transcript.innerText(), transcriptText);
 
   await page.getByRole('button', { name: 'Custom briefing' }).click();

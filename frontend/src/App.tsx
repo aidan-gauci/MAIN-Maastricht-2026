@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AudioLines, BadgeCheck, BookOpen, Check, ChevronDown, Clock3, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, Sparkles, Waves } from 'lucide-react';
+import { AudioLines, BadgeCheck, BookOpen, Check, ChevronDown, CircleHelp, Clock3, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, Waves, X } from 'lucide-react';
 
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
 type Source = { article_id: string; title: string; source: string; url: string };
 type Story = { id: string; title: string; reason: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
-type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string };
+type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null };
+type VoicePreset = { id: string; label: string };
+type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
+type ScheduleDraft = Omit<Schedule, 'schedule_id' | 'schedule_version' | 'generation_at' | 'delivery_at' | 'dispatch_status'>;
 type Fact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string };
 type Evidence = { id: string; title: string; publication_date?: string; articles: Source[]; facts: Fact[] };
 type Costs = { mode: string; stages: { stage: string; calls: number; input_tokens: number; output_tokens: number; characters: number; estimated_usd: number | null }[]; article_count: number; preparation_usd: number | null; per_briefing_usd: number | null; ten_x_preparation_usd: number | null };
@@ -37,8 +40,27 @@ const errorMessage = (error: unknown) => {
 const MAX_TOPICS = 12;
 const languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
 const money = (n: number | null) => n === null ? 'Unavailable' : `$${n.toFixed(4)}`;
+const newListenerId = () => {
+  const key = 'liquid-briefing-listener-id';
+  const existing = localStorage.getItem(key);
+  if (existing && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existing)) return existing;
+  const id = crypto.randomUUID();
+  localStorage.setItem(key, id);
+  return id;
+};
+const defaultTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const defaultScheduleDraft = (): ScheduleDraft => ({ profile_id: '', region: 'all', language: 'en', cadence: 'daily', local_time: '08:00', weekday: 0, timezone: defaultTimezone(), voice_preset: 'default' });
+const toScheduleDraft = (schedule: Schedule): ScheduleDraft => ({ profile_id: schedule.profile_id, region: schedule.region, language: schedule.language, cadence: schedule.cadence, local_time: schedule.local_time, weekday: schedule.weekday, timezone: schedule.timezone, voice_preset: schedule.voice_preset });
+const regionLabel = (region: string) => {
+  if (region === 'all') return 'All regions';
+  if (region === 'Europe') return 'Europe';
+  try { return `${new Intl.DisplayNames(['en'], { type: 'region' }).of(region) ?? region} (${region})`; }
+  catch { return region; }
+};
+const availableNow = (briefing: Briefing) => !briefing.available_at || Date.parse(briefing.available_at) <= Date.now();
 
 export default function App() {
+  const [listenerId] = useState(newListenerId);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [topics, setTopics] = useState<string[]>([]);
   const [languages, setLanguages] = useState<string[]>(['en']);
@@ -60,6 +82,19 @@ export default function App() {
   const [tab, setTab] = useState<'listen' | 'evidence' | 'costs'>('listen');
   const [playing, setPlaying] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [regions, setRegions] = useState<string[]>(['all', 'Europe']);
+  const [voicePresets, setVoicePresets] = useState<VoicePreset[]>([{ id: 'default', label: 'Default voice' }]);
+  const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(defaultScheduleDraft);
+  const scheduleDirtyRef = useRef(false);
+  const scheduleResponseRef = useRef<Schedule | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleMessage, setScheduleMessage] = useState('');
+  const [loadingListenerSettings, setLoadingListenerSettings] = useState(true);
+  const [history, setHistory] = useState<Briefing[]>([]);
+  const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
+  const [ratingBusy, setRatingBusy] = useState<string | null>(null);
   const [preferencesRequest, setPreferencesRequest] = useState(0);
   const [preferencesLoading, setPreferencesLoading] = useState(true);
   const [preferencesError, setPreferencesError] = useState('');
@@ -85,9 +120,13 @@ export default function App() {
         setProfiles(profiles);
         setProfileId(profiles[0]?.id ?? '');
         setTopics(topics);
-        if (languages.length) {
-          setLanguages(languages);
-          setLanguage(languages[0]);
+        if (languages.length) setLanguages(languages);
+        if (!scheduleDirtyRef.current) {
+          const initialLanguage = scheduleResponseRef.current?.language ?? (languages.includes(language) ? language : languages[0] ?? language);
+          setLanguage(initialLanguage);
+          setScheduleDraft(value => ({ ...value, profile_id: value.profile_id || profiles[0]?.id || '', language: initialLanguage }));
+        } else {
+          setScheduleDraft(value => ({ ...value, profile_id: value.profile_id || profiles[0]?.id || '' }));
         }
       })
       .catch(error => {
@@ -98,6 +137,36 @@ export default function App() {
       });
     return () => controller.abort();
   }, [preferencesRequest]);
+
+  async function refreshListenerData() {
+    const [regionValues, presets, scheduleResponse, feedback, briefings] = await Promise.all([
+      api<string[]>('/regions'), api<VoicePreset[]>('/voice-presets'),
+      api<{ schedule: Schedule | null }>(`/listeners/${listenerId}/schedule`),
+      api<{ ratings: Record<string, 'up' | 'down'> }>(`/listeners/${listenerId}/feedback`),
+      api<Briefing[]>(`/listeners/${listenerId}/briefings`),
+    ]);
+    setRegions(regionValues);
+    setVoicePresets(presets.length ? presets : [{ id: 'default', label: 'Default voice' }]);
+    scheduleResponseRef.current = scheduleResponse.schedule;
+    setSchedule(scheduleResponse.schedule);
+    if (scheduleResponse.schedule && !scheduleDirtyRef.current) {
+      setScheduleDraft(toScheduleDraft(scheduleResponse.schedule));
+      setLanguage(scheduleResponse.schedule.language);
+    }
+    setRatings(feedback.ratings ?? {});
+    setHistory(briefings);
+    setBriefing(current => current ?? briefings[0] ?? null);
+  }
+
+  useEffect(() => {
+    refreshListenerData()
+      .catch(e => setScheduleMessage(`Listener settings could not load. ${errorMessage(e)}`))
+      .finally(() => setLoadingListenerSettings(false));
+    const refresh = () => { if (document.visibilityState === 'visible') refreshListenerData().catch(() => undefined); };
+    const timer = window.setInterval(refresh, 60_000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, [listenerId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -151,11 +220,17 @@ export default function App() {
   const allFacts = useMemo(() => evidence.flatMap(item => item.facts), [evidence]);
   const canGenerate = mode === 'profile' ? Boolean(activeProfile) : selectedTopics.length > 0;
   const wildcard = { topics: selectedTopics, expertise, duration, language };
-  const request = mode === 'profile' ? { profile_id: profileId } : { wildcard };
+  const delivery = { listener_id: listenerId, language, region: scheduleDraft.region, voice_preset: scheduleDraft.voice_preset };
+  const request = mode === 'profile' ? { ...delivery, profile_id: profileId } : { ...delivery, wildcard };
   const settingsKey = mode === 'profile'
     ? JSON.stringify(request)
     : JSON.stringify({ wildcard: { ...wildcard, topics: [...wildcard.topics].sort() } });
   const settingsChanged = briefingSettings !== '' && briefingSettings !== settingsKey;
+
+  function updateScheduleDraft(update: (draft: ScheduleDraft) => ScheduleDraft) {
+    scheduleDirtyRef.current = true;
+    setScheduleDraft(update);
+  }
 
   function changeView(view: typeof tab) {
     if (view !== 'listen') audio.current?.pause();
@@ -193,12 +268,44 @@ export default function App() {
     }
   }
 
+  async function saveSchedule() {
+    setScheduleBusy(true); setScheduleMessage('');
+    try {
+      const saved = await api<{ schedule: Schedule }>(`/listeners/${listenerId}/schedule`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          profile_id: scheduleDraft.profile_id,
+          region: scheduleDraft.region,
+          language: scheduleDraft.language,
+          cadence: scheduleDraft.cadence,
+          local_time: scheduleDraft.local_time,
+          weekday: scheduleDraft.cadence === 'weekly' ? scheduleDraft.weekday : null,
+          timezone: scheduleDraft.timezone,
+          voice_preset: scheduleDraft.voice_preset,
+        }),
+      });
+      scheduleResponseRef.current = saved.schedule;
+      setSchedule(saved.schedule);
+      setScheduleDraft(toScheduleDraft(saved.schedule));
+      scheduleDirtyRef.current = false;
+      setScheduleMessage('Delivery schedule saved.');
+    } catch (e) { setScheduleMessage(`Schedule could not be saved. ${errorMessage(e)}`); }
+    finally { setScheduleBusy(false); }
+  }
+  async function rateStory(storyId: string, rating: 'up' | 'down') {
+    setRatingBusy(storyId);
+    try {
+      await api<{ rating: 'up' | 'down' }>(`/listeners/${listenerId}/feedback/${encodeURIComponent(storyId)}`, { method: 'PUT', body: JSON.stringify({ rating }) });
+      setRatings(value => ({ ...value, [storyId]: rating }));
+    } catch (e) { setError(`Feedback could not be saved. ${errorMessage(e)}`); }
+    finally { setRatingBusy(null); }
+  }
   async function retryAudio() {
     if (!briefing) return;
     setAudioError('');
     setAction('audio');
     try {
-      const result = await api<Briefing>(`/briefings/${briefing.id}/audio`, { method: 'POST' });
+      const result = await api<Briefing>(`/briefings/${encodeURIComponent(briefing.id)}/audio?listener_id=${encodeURIComponent(listenerId)}`, { method: 'POST' });
       setBriefing(result);
       if (result.audio_url) {
         // A regenerated file can have the same URL as the one that failed to load.
@@ -271,8 +378,27 @@ export default function App() {
                 <label>Depth<select value={expertise} onChange={event => setExpertise(event.target.value)}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
                 <label>Length<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={3}>3 minutes</option><option value={5}>5 minutes</option><option value={8}>8 minutes</option></select></label>
               </div>
-              <label>Language<select value={language} onChange={event => setLanguage(event.target.value)}>{languages.map(code => <option key={code} value={code}>{languageNames.of(code)}</option>)}</select></label>
             </div>}
+          <div className="delivery-settings">
+            <div className="delivery-heading"><span className="step-label">DELIVERY SETTINGS</span><p>Choose how your briefing should be delivered.</p></div>
+            <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageNames.of(value) ?? value.toUpperCase()}</option>)}</select></label>
+            <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>
+            <label>Voice preset<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value }))}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+          </div>
+          <details className="schedule-settings">
+            <summary><span><Clock3 size={15}/>Schedule delivery</span><ChevronDown size={15}/></summary>
+            <div className="schedule-fields">
+              <label>Profile<select value={scheduleDraft.profile_id || profileId} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, profile_id: e.target.value }))}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+              <label>Cadence<select value={scheduleDraft.cadence} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, cadence: e.target.value as ScheduleDraft['cadence'] }))}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+              {scheduleDraft.cadence === 'weekly' && <label>Weekday<select value={scheduleDraft.weekday ?? 0} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, weekday: Number(e.target.value) }))}>{['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>}
+              <label>Local delivery time<input type="time" value={scheduleDraft.local_time} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, local_time: e.target.value }))}/></label>
+              <label>Time zone (IANA)<input value={scheduleDraft.timezone} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, timezone: e.target.value }))} placeholder="Europe/Amsterdam" autoComplete="off"/></label>
+              <p className="schedule-note">Generation starts 30 minutes before delivery. Your audio appears at the selected time.</p>
+              <button className="retry-audio save-schedule" onClick={saveSchedule} disabled={scheduleBusy || preferencesLoading || loadingListenerSettings || !scheduleDraft.profile_id}>{scheduleBusy ? 'Saving schedule…' : schedule ? 'Save schedule changes' : 'Save delivery schedule'}</button>
+              {scheduleMessage && <p className="schedule-message" role="status">{scheduleMessage}</p>}
+              {schedule && <><p className={/fail|error|unavailable/i.test(schedule.dispatch_status) ? 'schedule-message schedule-failed' : 'schedule-message'} role="status">Scheduler status: {schedule.dispatch_status.replace(/_/g, ' ')}</p><p className="next-delivery">Next delivery {new Date(schedule.delivery_at).toLocaleString([], { timeZone: schedule.timezone, dateStyle: 'medium', timeStyle: 'short' })} ({schedule.timezone})</p></>}
+            </div>
+          </details>
           <button className="primary-button" onClick={makeBriefing} disabled={Boolean(action) || preferencesLoading || !canGenerate}>
             {action === 'briefing' ? <><LoaderCircle className="spin" size={17}/> Preparing your briefing</> : <><Sparkles size={16}/> Create my briefing <span className="button-arrow" aria-hidden="true">→</span></>}
           </button>
@@ -280,7 +406,7 @@ export default function App() {
             {action === 'briefing' ? 'Preparing your briefing.' : settingsChanged ? 'Settings changed. Create a new briefing to apply them.' : ''}
           </p>
           {briefingError && <p className="action-error" role="alert">{briefingError}</p>}
-          <div className="privacy-note"><ShieldCheck size={15}/><span>No account required.</span></div>
+          <div className="privacy-note"><ShieldCheck size={15}/><span>No account. Your browser ID keeps your schedule and feedback together.</span></div>
         </aside>
         <section className="content-card" aria-label="Briefing and sources">
           <div className="content-tabs">
@@ -290,13 +416,16 @@ export default function App() {
               <button aria-pressed={tab === 'costs'} className={tab === 'costs' ? 'content-tab active' : 'content-tab'} onClick={() => changeView('costs')}><Info size={15}/> Costs</button>
             </nav>
           </div>
+          {error && <div role="alert" className="error-banner"><CircleHelp size={16}/><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}><X size={15}/></button></div>}
           <div hidden={tab !== 'listen'}>
+            {history.length > 0 && <div className="briefing-history"><span className="section-kicker">DELIVERED BRIEFINGS</span>{history.map(item => <button key={item.id} className={briefing?.id === item.id ? 'history-item selected' : 'history-item'} onClick={() => setBriefing(item)}><span>{item.profile_name} · {item.language.toUpperCase()}</span><strong>{item.stories.length} stories</strong></button>)}</div>}
             {briefing ?
               <BriefingView briefing={briefing} headingRef={briefingHeading} playing={playing} audioRef={audio}
                 onPlaybackChange={setPlaying} onAudioError={() => { setFailedPlayback(true); setPlaying(false); }}
                 audioRetryTime={audioRetryTime} failedPlayback={failedPlayback} audioError={audioError} expanded={expanded} onExpand={setExpanded}
                 onRetry={retryAudio} busy={Boolean(action)} retrying={action === 'audio'} evidence={evidence}
-                onInspectEvidence={inspectEvidence}/> :
+                onInspectEvidence={inspectEvidence}
+                ratings={ratings} ratingBusy={ratingBusy} onRate={rateStory}/> :
               <div className="empty-state"><div className="sound-art" aria-hidden="true"><div/><div/><div/><AudioLines size={31}/></div><h2>No briefing yet</h2><p>Choose a profile or topics, then create your first audio briefing.</p></div>}
           </div>
           <div hidden={tab !== 'evidence'}>
@@ -314,7 +443,7 @@ export default function App() {
   </div>;
 }
 
-function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChange, onAudioError, audioRetryTime, failedPlayback, audioError, expanded, onExpand, onRetry, busy, retrying, evidence, onInspectEvidence }: {
+function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChange, onAudioError, audioRetryTime, failedPlayback, audioError, expanded, onExpand, onRetry, busy, retrying, evidence, onInspectEvidence, ratings, ratingBusy, onRate }: {
   briefing: Briefing;
   headingRef: RefObject<HTMLHeadingElement>;
   playing: boolean;
@@ -331,11 +460,16 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
   retrying: boolean;
   evidence: Evidence[];
   onInspectEvidence: (storyId: string, button: HTMLButtonElement) => void;
+  ratings: Record<string, 'up' | 'down'>;
+  ratingBusy: string | null;
+  onRate: (storyId: string, rating: 'up' | 'down') => void;
 }) {
+  const available = availableNow(briefing);
   const audioSrc = briefing.audio_url && audioRetryTime
-    ? `${briefing.audio_url}?retry=${audioRetryTime}`
+    ? `${briefing.audio_url}${briefing.audio_url.includes('?') ? '&' : '?'}retry=${audioRetryTime}`
     : briefing.audio_url;
-  const ready = Boolean(audioSrc) && !failedPlayback;
+  const ready = Boolean(audioSrc) && !failedPlayback && available;
+  const usedSources = [...new Map(briefing.segments.flatMap(segment => segment.sources).map(source => [source.article_id, source])).values()];
   const unavailable = briefing.audio_status === 'unavailable';
   const storyCount = briefing.stories.length;
   return <div className="briefing-view">
@@ -349,19 +483,20 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
     </div>
     <div className={ready ? 'player ready' : 'player'}>
       <div className="player-info">
-        <strong>{ready ? (playing ? 'Now playing' : 'Listen to your briefing') : 'Read your briefing below'}</strong>
-        <span>{ready ? 'AI-generated narration' : failedPlayback ? 'The audio file could not be played.' : unavailable ? 'Audio generation is unavailable.' : 'Audio is ready to generate.'}</span>
+        <strong>{ready ? (playing ? 'Now playing' : 'Listen to your briefing') : available ? 'Read your briefing below' : 'Your briefing is scheduled'}</strong>
+        <span>{ready ? 'AI-generated narration' : !available ? `Audio will be available ${new Date(briefing.available_at!).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}.` : failedPlayback ? 'The audio file could not be played.' : unavailable ? 'Audio generation is unavailable.' : 'Audio is ready to generate.'}</span>
       </div>
       {ready ?
         <audio key={audioSrc} ref={audioRef} className="audio-controls" controls preload="metadata"
           src={audioSrc ?? undefined} aria-label={`${briefing.profile_name} audio briefing`}
           onPlay={() => onPlaybackChange(true)} onPause={() => onPlaybackChange(false)}
           onEnded={() => onPlaybackChange(false)} onError={onAudioError}/> :
-        <button className="retry-audio" onClick={onRetry} disabled={busy}>
+        available && <button className="retry-audio" onClick={onRetry} disabled={busy}>
           <RotateCw size={14}/>{retrying ? 'Generating audio…' : failedPlayback ? 'Reload audio' : unavailable ? 'Retry audio' : 'Generate audio'}
         </button>}
     </div>
     {(audioError || failedPlayback) && <p className="action-error" role="alert">{audioError || 'Playback failed. Reload the audio or keep reading.'}</p>}
+    {ready && <section className="briefing-sources" aria-label="Sources used by this briefing"><div><span className="step-label">SOURCES USED</span><p>Reporting cited in this briefing.</p></div>{usedSources.length ? <div className="briefing-source-list">{usedSources.map(source => <a key={source.article_id} href={source.url} target="_blank" rel="noreferrer"><span>{source.source}</span><strong>{source.title}</strong></a>)}</div> : <p className="no-sources">No source links were attached to this briefing.</p>}</section>}
     <div className="story-list">
       <div className="section-kicker"><span>IN THIS BRIEFING</span></div>
       {briefing.stories.map(story => {
@@ -373,14 +508,15 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
           <div className="story-body">
             <h3>{story.title}</h3>
             <p>{story.reason}</p>
+            <div className="story-feedback" aria-label={`Rate ${story.title}`}><span>Was this useful?</span><button type="button" className={ratings[story.id] === 'up' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'up')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} useful`} aria-pressed={ratings[story.id] === 'up'}><ThumbsUp size={14}/> Helpful</button><button type="button" className={ratings[story.id] === 'down' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'down')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} not useful`} aria-pressed={ratings[story.id] === 'down'}><ThumbsDown size={14}/> Not useful</button></div>
             <div className="transcript">
               {segments.map(segment => <div className="transcript-segment" key={segment.id}>
                 <p>{segment.text}{segment.conflict && <span className="conflict-flag"><Info size={12}/> Conflicting reports</span>}</p>
-                <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>
+                {available && <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>
                   <BookOpen size={13}/>{segment.sources.length} {segment.sources.length === 1 ? 'source' : 'sources'}
                   <ChevronDown size={13} className={expanded === segment.id ? 'rotated' : ''}/>
-                </button>
-                {expanded === segment.id && <div className="source-list">
+                </button>}
+                {available && expanded === segment.id && <div className="source-list">
                   {segment.sources.map(src => <a key={src.article_id} href={src.url} target="_blank" rel="noreferrer">
                     <span>{src.source}</span><strong>{src.title}</strong><span className="source-out">↗</span>
                   </a>)}

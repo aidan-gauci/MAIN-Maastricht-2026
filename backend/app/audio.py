@@ -10,8 +10,9 @@ from uuid import uuid4
 
 def offline_voice(text, path):
     if binary := (shutil.which("espeak-ng") or shutil.which("espeak")):
-        command = [binary, "-v", "en", "-w", str(path), "--stdin"]
+        command = [binary, "-v", "en", "-w", path.name, "--stdin"]
         env = None
+        working_dir = path.parent
     elif os.name == "nt":
         command = [
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
@@ -21,9 +22,11 @@ def offline_voice(text, path):
             "$voice.Speak([Console]::In.ReadToEnd()); $voice.Dispose()",
         ]
         env = {**os.environ, "LIQUID_VOICE_OUTPUT": str(path)}
+        working_dir = None
     else:
         raise RuntimeError("Install eSpeak NG for offline narration")
-    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=speech_timeout())
+    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=speech_timeout(),
+                   cwd=working_dir)
 
 
 def speech_timeout():
@@ -124,6 +127,7 @@ def create_audio(briefing, store, providers, mode):
         key = _audio_key(("briefing-v1", [clip.name for clip in clips]))
         target = store.audio_dir / f"{key}.{extension}"
     url = f"/api/audio/{target.name}"
+    store.audio_dir.mkdir(parents=True, exist_ok=True)
     if target.is_file():
         return url
 

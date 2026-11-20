@@ -13,11 +13,12 @@ from typing import Any, Callable
 
 
 class Providers:
-    def __init__(self, mode: str = "offline", record_usage: Callable[..., None] | None = None):
+    def __init__(self, mode: str = "offline", record_usage: Callable[..., None] | None = None, voice_preset: str = "default"):
         self.mode = mode.lower()
         self.record_usage = record_usage or (lambda *args, **kwargs: None)
         # Set when live extraction raised; preparation then falls back to the local heuristic.
         self.extraction_failed = False
+        self.voice_preset = voice_preset
 
     @staticmethod
     def _usd(input_tokens: int = 0, output_tokens: int = 0, characters: int = 0, prefix: str = "OPENAI") -> float | None:
@@ -123,17 +124,19 @@ class Providers:
 
     def _generate_script(self, prompt: str, language: str) -> str:
         client = self._client()
-        model = os.getenv("OPENAI_SMALL_MODEL", "gpt-4o-mini")
+        model = os.getenv("OPENAI_BRIEFING_MODEL", "gpt-4.1")
         response = client.chat.completions.create(
             model=model, temperature=0.2,
             messages=[
-                {"role": "system", "content": f"Write concise, neutral spoken narration in language code {language}. Use only the supplied verified amounts and units. Add no numbers, number words, IDs, sources, or unsupported claims. Paraphrase in fresh wording. Identify conflicting values clearly and give no financial or other advice."},
+                {"role": "system", "content": f"Write concise, neutral spoken narration in language code {language}. Use only the supplied verified amounts and units. Add no numbers, number words, IDs, sources, or unsupported claims. Paraphrase in fresh wording. Explain implications for the requested listener expertise and style only when supported by the supplied context. Identify conflicting values clearly and give no financial or other advice."},
                 {"role": "user", "content": prompt},
             ],
         )
         usage = getattr(response, "usage", None)
         in_tokens, out_tokens = getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0
-        self.record_usage("script_generation", mode=self.mode, input_tokens=in_tokens, output_tokens=out_tokens, estimated_usd=self._usd(input_tokens=in_tokens, output_tokens=out_tokens))
+        estimate = self._usd(input_tokens=in_tokens, output_tokens=out_tokens, prefix="OPENAI_SCRIPT")
+        self.record_usage("script_generation", mode=self.mode, input_tokens=in_tokens, output_tokens=out_tokens,
+                          estimated_usd=estimate if estimate is not None else self._usd(input_tokens=in_tokens, output_tokens=out_tokens))
         return response.choices[0].message.content or ""
 
     def synthesize(self, text: str, output_path: str | Path, language: str = "en") -> None:
@@ -145,7 +148,12 @@ class Providers:
         api_key = os.getenv("ELEVENLABS_API_KEY")
         if not api_key:
             raise RuntimeError("ELEVENLABS_API_KEY is not configured")
-        voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+        from .config import configured_voice_presets
+        presets = configured_voice_presets()
+        preset = next((row for row in presets if row["id"] == self.voice_preset), None)
+        if preset is None:
+            preset = next(row for row in presets if row["id"] == "default")
+        voice_id = os.getenv(preset["voice_id_env"]) or os.getenv("ELEVENLABS_VOICE_ID")
         if not voice_id:
             raise RuntimeError("ELEVENLABS_VOICE_ID is not configured")
         try:

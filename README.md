@@ -88,6 +88,8 @@ The application records token usage for OpenAI and submitted text characters for
 | `OPENAI_EMBEDDING_INPUT_USD_PER_MILLION_TOKENS` | USD per million embedding input tokens |
 | `OPENAI_INPUT_USD_PER_MILLION_TOKENS` | USD per million text input tokens |
 | `OPENAI_OUTPUT_USD_PER_MILLION_TOKENS` | USD per million text output tokens |
+| `OPENAI_SCRIPT_INPUT_USD_PER_MILLION_TOKENS` | Optional input rate for briefing narration |
+| `OPENAI_SCRIPT_OUTPUT_USD_PER_MILLION_TOKENS` | Optional output rate for briefing narration |
 | `ELEVENLABS_USD_PER_1000_CHARS` | USD per 1,000 submitted characters |
 
 Costs are split into two figures:
@@ -95,6 +97,23 @@ Costs are split into two figures:
 - `per_briefing_usd` is script spend averaged over saved briefings, plus speech spend averaged over briefings that received audio, including cache hits and successful retries. Speech-stage calls count clips synthesized by the provider. If audio has yet to succeed for any briefing, incurred speech spend is spread over saved briefings.
 
 USD figures are calculated from the recorded tokens and characters with the rates set when the report is built, so you can set or correct rates after a run. If a rate is missing for a stage that was used, the matching figure is unavailable. The 10x preparation projection assumes the same article mix, model routing, and unit rates. It does not multiply the cost of one listener's briefing.
+Set `OPENAI_BRIEFING_MODEL` to choose the narration model (defaults to `gpt-4.1`) and `ELEVENLABS_MODEL` to choose the speech model (defaults to `eleven_multilingual_v2`). Narration rates fall back to the general text rates. To offer another voice preset, set `LIQUID_VOICE_PRESETS` to a JSON object such as:
+
+```json
+{"default":{"label":"Default voice","voice_id_env":"ELEVENLABS_VOICE_ID"},"calm":{"label":"Calm","voice_id_env":"ELEVENLABS_CALM_VOICE_ID"}}
+```
+
+Set the actual voice IDs in the named server environment variables. An unavailable preset uses the existing default voice.
+
+Use a fresh event data directory for a clean measurement because the cost view accumulates calls, including retries. The 10x preparation projection assumes the same article mix, model routing, and unit rates. It does not multiply the cost of one listener's briefing. Missing rates leave the USD estimate unavailable.
+
+## Scheduled delivery
+
+Listener settings save one daily or weekly delivery time in the browser's selected IANA timezone. Each browser stores its own listener ID. Scheduled briefings appear at the delivery time with their cited sources. Story ratings and recent spoken facts are stored separately for each listener. The output language and article region are independent. To enable region filters for an imported corpus, supply explicit `region` or `country` metadata and reimport existing records as needed.
+
+Demo mode uses a local timer when n8n is unconfigured. Keep the backend running during generation and delivery. The first eligible occurrence is one with a full 30-minute generation window. During daylight saving changes, a missing local time shifts to the first valid minute, and a repeated local time uses its first occurrence.
+
+The prototype ranker supports scheduled relevance, explicit regions, and seven-day fact suppression in this checkout. Apply the separate recommendation patch to enable the full feedback-aware ranking interface. See the [n8n Cloud setup](automation/SETUP.md) for the workflow exports, credential setup, and deployment checks. Activation requires a public HTTPS backend and durable storage for both SQLite and audio files.
 
 ## Demo and cleanup
 
