@@ -240,9 +240,9 @@ class RecommendationTest(unittest.TestCase):
         self.assertIn(old_fact["id"], {item["id"] for item in pipeline.rank([updated], listener)[0]["facts"]})
         self.assertEqual(updated["facts"], [old_fact, new_fact, unsupported])
 
-    def test_offline_narration_uses_expertise_and_style_with_the_same_evidence(self):
+    def test_offline_narration_uses_expertise_for_the_introduction_and_one_claim_wording(self):
         station = story("station", "energy")
-        beginner = profile({"energy": 1.0}, expertise="beginner", style="neutral")
+        beginner = profile({"energy": 1.0}, expertise="beginner", style="Use plain language")
         advanced = dict(beginner, expertise="advanced")
         figures_first = dict(advanced, style="Lead with the figures")
         ranked = pipeline.rank([station], beginner)
@@ -250,9 +250,12 @@ class RecommendationTest(unittest.TestCase):
         segments = [pipeline.narrate(ranked, listener, Providers())[0]
                     for listener in (beginner, advanced, figures_first)]
 
-        self.assertEqual(len({segment["text"] for segment in segments}), 3)
-        for segment in segments:
-            self.assertIn("42 megawatts", segment["text"])
+        # Expertise changes the introduction. Whatever the style, a claim is "Label, amount."
+        self.assertEqual(segments[1]["text"], segments[2]["text"])
+        self.assertNotEqual(segments[0]["text"], segments[1]["text"])
+        for listener, segment in zip((beginner, advanced, figures_first), segments):
+            intro = pipeline._NARRATION_FRAMES["en"][listener["expertise"]]
+            self.assertEqual(segment["text"], f"{intro} Solar capacity, 42 megawatts.")
             self.assertEqual(segment["fact_ids"], [station["facts"][0]["id"]])
             self.assertEqual(segment["sources"], station["articles"])
 
