@@ -111,6 +111,11 @@ def _mentions_topic(key: str, text: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(key)}(?!\w)", text, re.I))
 
 
+def _positive_topic_weights(profile: dict[str, Any]) -> dict[str, float]:
+    return {topic: float(weight) for topic, weight in (profile.get("topic_weights") or {}).items()
+            if _topic_key(topic) and float(weight) > 0}
+
+
 def _profile_scores(weights: dict[str, float], labels: set[str], text: str):
     """Topic match uses story labels. Relevance measures interests mentioned in sourced text."""
     total = sum(weights.values())
@@ -519,8 +524,7 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
 def rank(stories: list[dict[str, Any]], profile: dict[str, Any]) -> list[dict[str, Any]]:
     """Apply the fixed topic, relevance, recency, and novelty score."""
     excluded = {_topic_key(topic) for topic in profile.get("excluded_topics", [])} - {""}
-    weights = {topic: float(weight) for topic, weight in (profile.get("topic_weights") or {}).items()
-               if _topic_key(topic) and float(weight) > 0}
+    weights = _positive_topic_weights(profile)
     candidates = []
     for story in stories:
         topics = {_topic_key(topic) for topic in story.get("topics", [])}
@@ -575,7 +579,8 @@ def _quantity_supported(fact: dict[str, Any], language: str) -> bool:
 _SPELLED_NUMBERS = re.compile(r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|hundred|thousand|million|billion|null|eins|zwei|drei|vier|f[uü]nf|sechs|sieben|acht|neun|zehn|elf|zw[oö]lf|zwanzig|dreißig|vierzig|f[uü]nfzig|hundert|tausend|een|twee|drie|vier|vijf|zes|zeven|acht|negen|tien|twintig|dertig|honderd|duizend)\b", re.I)
 
 
-def _script_is_valid(candidate: str, facts: list[dict[str, Any]], language: str) -> bool:
+def _script_is_valid(candidate: str, facts: list[dict[str, Any]],
+                     ordered_quantities: list[tuple[str, str]], language: str) -> bool:
     text = str(candidate or "").strip()
     without_units = re.sub(_UNIT_PATTERN, " ", text, flags=re.I)
     if not text or re.search(r"\b(?:fact|story)-[a-z0-9-]+\b", text, re.I) or _SPELLED_NUMBERS.search(without_units):
@@ -583,14 +588,13 @@ def _script_is_valid(candidate: str, facts: list[dict[str, Any]], language: str)
     source_hashes = {str(f.get("source_sentence_hash")) for f in facts if f.get("source_sentence_hash")}
     if any(_sentence_hash(sentence) in source_hashes for sentence in re.split(r"(?<=[.!?])\s+", text)):
         return False
-    allowed = {_value_unit(f.get("value", ""), f.get("unit", ""), str(f.get("language", language))) for f in facts}
     mentions = []
     for match in _NUM.finditer(text):
         number = _NUMBER.search(match.group(0))
         if number:
             unit = match.group(0)[number.end():].strip()
             mentions.append((_canonical_number(number.group(0), language), _canonical_unit(unit)))
-    return bool(mentions) and all(mention in allowed for mention in mentions)
+    return list(dict.fromkeys(mentions)) == ordered_quantities
 
 
 _MEASURE_LABELS = (
@@ -630,11 +634,12 @@ def _measure_label(fact: dict[str, Any], language: str, story_topics: list[str])
 
 
 def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: Any) -> list[dict[str, Any]]:
-    """Create short segments from validated facts; never introduce new figures."""
+    """Emphasize the listener's interests while retaining the verified claims."""
     result = []
     duration = max(1, int(profile.get("duration", 5) or 5))
     limit = max(1, min(len(ranked), duration))
     output_language = str(profile.get("language", "en")).lower()
+    interests = [(_topic_key(topic), weight) for topic, weight in _positive_topic_weights(profile).items()]
     for story in ranked[:limit]:
         by_id = {str(a.get("article_id")): a for a in story.get("articles", [])}
         facts = [fact for fact in story.get("facts", []) if fact.get("id") and str(fact.get("article_id", "")) in by_id and fact.get("evidence") and _quantity_supported(fact, str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en")))]
@@ -647,17 +652,21 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
         # Prefer a number's original output-language form, then deduplicate
         # cross-language editions by their canonical quantity.
         preferred = sorted(facts, key=lambda f: str(f.get("language", by_id[str(f["article_id"])].get("language", "en"))) != output_language)
-        unique = []
-        seen = set()
+        by_quantity = {}
         for fact in preferred:
-            source_language = str(fact.get("language", by_id[str(fact["article_id"])].get("language", "en")))
-            key = _value_unit(fact.get("value", ""), fact.get("unit", ""), source_language)
-            if key not in seen:
-                seen.add(key)
-                unique.append(fact)
+            source_language = str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en"))
+            quantity = _value_unit(fact["value"], fact.get("unit", ""), source_language)
+            by_quantity.setdefault(quantity, fact)
+
+        # Sort the presentation after choosing sourced quantities and citations.
+        # Stable sorting keeps the previous order when interests don't distinguish the claims.
+        ordered_quantities = sorted(by_quantity, key=lambda quantity: -sum(
+            weight for topic, weight in interests if _mentions_topic(topic, by_quantity[quantity]["evidence"])
+        ))
+        ordered_facts = [by_quantity[quantity] for quantity in ordered_quantities]
         claims = "; ".join(
-            f"{_measure_label(f, output_language, story.get('topics', []))}: {f.get('value', '')} {f.get('unit', '')}".strip()
-            for f in unique if f.get("value")
+            f"{_measure_label(f, output_language, story.get('topics', []))}: {f['value']} {f.get('unit', '')}".strip()
+            for f in ordered_facts
         )
         expertise = str(profile.get("expertise", "intermediate"))
         frames = {
@@ -667,13 +676,22 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
         }
         text = frames.get(output_language, frames["en"]).get(expertise, frames.get(output_language, frames["en"])["intermediate"])
         conflict_text = {"en": "The reports give conflicting values.", "de": "Die Berichte nennen unterschiedliche Werte.", "nl": "De berichten noemen verschillende waarden."}.get(output_language, "The reports give conflicting values.")
-        # Draft from the verified amount list only. The validator rejects new
-        # quantities, number words, metadata IDs, and exact source sentences.
+        # Use the local summary when a provider drops, adds, or reorders quantities.
         if getattr(providers, "live", False):
-            context_rows = "\n".join(f"metadata id={f['id']} (never speak this ID); source context={f.get('evidence', '')}; verified amount={f.get('value', '')} {f.get('unit', '')}" for f in unique)
-            prompt = f"Write a concise paraphrase in language {output_language}. Use only these verified amounts, units, and bounded contexts. Add no other numbers or number words. Do not speak metadata IDs or copy any full article sentence. Listener expertise: {expertise}; style: {profile.get('style', 'neutral')}\n{context_rows}\nConflicting reports: {conflicted}"
-            candidate = providers.generate_script(prompt, profile.get("language", "en"))
-            if _script_is_valid(candidate, facts, output_language):
+            context_rows = "\n".join(
+                f"source context={fact['evidence']}; verified amount={fact['value']} {fact.get('unit', '')}"
+                for fact in ordered_facts
+            )
+            prompt = (
+                f"Write a concise paraphrase in language {output_language}. Lead with the first claim, "
+                "then cover every verified amount and unit in the given order. Keep each quantity attached "
+                "to its reported measure. Use only the evidence below. Add no numbers, including number words, "
+                "and do not copy full article sentences. "
+                f"Listener expertise: {expertise}; style: {profile.get('style', 'neutral')}\n"
+                f"{context_rows}\nConflicting reports: {conflicted}"
+            )
+            candidate = providers.generate_script(prompt, output_language)
+            if _script_is_valid(candidate, facts, ordered_quantities, output_language):
                 text = candidate.strip()
         if conflicted and conflict_text.lower() not in text.lower():
             text += " " + conflict_text

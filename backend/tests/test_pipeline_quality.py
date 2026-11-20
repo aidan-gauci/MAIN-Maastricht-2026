@@ -1,8 +1,15 @@
 from copy import deepcopy
 from itertools import permutations
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock, patch
 
+from backend.app.config import DEMO, Wildcard
+from backend.app.importer import read_articles
 from backend.app.pipeline import fixture_articles, narrate, prepare, rank
+from backend.app.service import generate_briefing, prepare_corpus, wildcard_profile
+from backend.app.storage import Store
 
 
 def article(key, title, body, **fields):
@@ -170,6 +177,76 @@ class RecommendationQualityTest(unittest.TestCase):
                 self.assertEqual(segment["fact_ids"], [f["id"] for f in source["facts"]])
                 self.assertEqual(segment["sources"], source["articles"])
                 self.assertEqual(segment["conflict"], bool(source["conflicts"]))
+                self.assertEqual(segment["conflict_labels"], list(dict.fromkeys(
+                    conflict["label"] for conflict in source["conflicts"]
+                )))
                 for fact in source["facts"]:
                     self.assertIn(fact["evidence"], bodies[fact["article_id"]])
+                    if fact["conflict_status"] == "conflict":
+                        self.assertIn(fact["value"], segment["text"])
         self.assertEqual(stories, snapshot)
+
+
+class SummaryPersonalizationTest(unittest.TestCase):
+    def test_wildcard_profile_selects_and_emphasizes_the_same_story_facts(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        store = Store(root / "test.sqlite3", root / "audio")
+        store.initialize()
+        stories = prepare_corpus(store, read_articles(DEMO / "articles.jsonl"))
+        bellmare = next(story for story in stories if "a02-en" in members(story))
+
+        segments = {}
+        with patch("backend.app.service.create_audio", return_value="/api/audio/test.wav"):
+            for topic, lead in (("rates", "policy rate: 3.25 %"), ("inflation", "inflation: 2.6 %")):
+                with self.subTest(topic=topic):
+                    profile = wildcard_profile(Wildcard(
+                        topics=[topic], expertise="intermediate", language="en", duration=3,
+                    ))
+                    briefing = generate_briefing(store, profile)
+                    first_story = briefing["stories"][0]
+                    self.assertEqual(first_story["id"], bellmare["id"])
+                    self.assertIn(topic, first_story["reason"])
+                    segment = briefing["segments"][0]
+                    self.assertEqual(segment["id"], "segment-" + bellmare["id"])
+                    self.assertTrue(segment["text"].startswith(f"The reports give these measures: {lead};"))
+                    self.assertIn("policy rate: 3.25 %", segment["text"])
+                    self.assertIn("inflation: 2.6 %", segment["text"])
+                    segments[topic] = {key: value for key, value in segment.items() if key != "text"}
+
+        self.assertEqual(segments["rates"], segments["inflation"])
+        self.assertEqual(segments["rates"]["fact_ids"], [fact["id"] for fact in bellmare["facts"]])
+        self.assertEqual(segments["rates"]["sources"], bellmare["articles"])
+        self.assertEqual({story["id"]: story for story in store.stories()},
+                         {story["id"]: story for story in stories})
+
+    def test_live_summary_uses_weighted_emphasis_and_falls_back_to_complete_figures(self):
+        story, = prepare([
+            article("bank", "Central bank leaves policy rate on hold",
+                    "The bank kept its policy rate at 3.25 percent. It forecasts inflation of 2.6 percent."),
+        ], None)
+        profile = {
+            "topic_weights": {"rates": 0.2, "inflation": 0.8},
+            "expertise": "intermediate", "language": "en",
+        }
+        ranked = rank([story], profile)
+        offline, = narrate(ranked, profile, None)
+        valid = "Projected inflation is 2.6 percent. The policy rate remains at 3.25 percent."
+        provider = Mock(live=True)
+        provider.generate_script.return_value = valid
+
+        live, = narrate(ranked, profile, provider)
+        self.assertEqual(live, dict(offline, text=valid))
+        prompt, language = provider.generate_script.call_args.args
+        self.assertEqual(language, "en")
+        self.assertLess(prompt.index("verified amount=2.6"), prompt.index("verified amount=3.25"))
+
+        for candidate in (
+            "Projected inflation is 2.6 percent.",
+            "The policy rate remains at 3.25 percent. Projected inflation is 2.6 percent.",
+            "Projected inflation is 2.6 percent. The policy rate remains at 3.75 percent.",
+        ):
+            with self.subTest(candidate=candidate):
+                provider.generate_script.return_value = candidate
+                self.assertEqual(narrate(ranked, profile, provider), [offline])
