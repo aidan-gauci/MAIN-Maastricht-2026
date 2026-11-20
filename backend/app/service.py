@@ -17,6 +17,9 @@ from .storage import Store
 from .summaries import prepare_summaries, select_summaries
 
 STAGES = ("ingestion", "story_extraction", "script_generation", "speech_generation")
+# Average pace of a narrated briefing. Narration is built only from verified figures and never padded,
+# so the briefing reports how long it will actually run next to the length the listener asked for.
+SPOKEN_WORDS_PER_MINUTE = 150
 UTC = timezone.utc
 
 
@@ -196,8 +199,10 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
     if not has_stories:
         raise ValueError("No prepared news yet. Run the import command for this mode and corpus")
     limit = max(1, int(profile.get("duration", 5) or 5))
+    # Narration stops at the requested story count. Stories with nothing that can be spoken faithfully
+    # are passed over, so the next ranked story takes their place.
     selected = pipeline.rank(ranking, profile, feedback_events=feedback_events,
-                             spoken_fact_ids=spoken_fact_ids, region=region)[:limit]
+                             spoken_fact_ids=spoken_fact_ids, region=region)
     if not selected:
         raise NoRelevantStories("No sourced stories match this profile")
     if spoken_fact_ids:
@@ -208,6 +213,7 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
     if not segments:
         raise ValueError("No narration passed the evidence checks")
     used = {fact for segment in segments for fact in segment["fact_ids"]}
+    spoken_words = sum(len(str(segment["text"]).split()) for segment in segments)
     briefing = dict(
         id=briefing_id or uuid4().hex,
         listener_id=listener_id,
@@ -223,6 +229,8 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
             for story in selected if any(fact["id"] in used for fact in story["facts"])
         ],
         segments=segments,
+        requested_minutes=limit,
+        estimated_seconds=round(spoken_words * 60 / SPOKEN_WORDS_PER_MINUTE),
         audio_url=None,
         audio_status="pending",
     )

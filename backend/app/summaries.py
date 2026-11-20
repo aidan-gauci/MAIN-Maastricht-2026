@@ -28,6 +28,11 @@ def prepare_summaries(stories):
             key=lambda topic: (-_mentions_topic(topic, story["title"]), -coverage[topic], topic),
         )[:_MAX_ANGLES]
 
+        # An eligible story whose figures cannot be spoken faithfully has no summary and is never selected.
+        # What can be said depends on the facts alone, so one rendering decides for every variant.
+        if not narrate([story], {"language": "en", "expertise": "intermediate", "topic_weights": {}}, None):
+            continue
+
         variants = {}
         for angle in [_NEUTRAL, *angles]:
             versions = {}

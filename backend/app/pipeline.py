@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from heapq import nlargest
 from typing import Any, NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -265,11 +266,27 @@ def _provider_batches(groups: list[list[dict[str, Any]]]):
         yield batch
 
 
-def _topics(group: list[dict[str, Any]]) -> list[str]:
-    blob = " ".join(str(a.get("title", "")) + " " + str(a.get("body", ""))[:2500] for a in group).lower()
-    inferred = [topic for topic, pattern in _TOPIC_PATTERNS.items() if pattern.search(blob)]
+def _is_about(pattern: re.Pattern[str], article: dict[str, Any]) -> bool:
+    """A topic names what an article is about: in its headline, or repeated in its text.
+
+    One passing mention ("conditional on energy prices") does not make a central bank story an
+    energy story. Each article is judged alone, so translations of one mention do not add up.
+    """
+    return bool(pattern.search(str(article.get("title", "")))) or len(pattern.findall(str(article.get("body", ""))[:2500])) >= 2
+
+
+def _topics(group: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """Topics of a story, and the inferred ones that are only mentioned in passing."""
+    inferred, passing = [], []
+    for topic, pattern in _TOPIC_PATTERNS.items():
+        mentioning = [a for a in group if pattern.search(str(a.get("title", "")) + " " + str(a.get("body", ""))[:2500])]
+        if mentioning:
+            inferred.append(topic)
+            if not any(_is_about(pattern, a) for a in mentioning):
+                passing.append(topic)
     supplied = [_topic_key(topic) for article in group for topic in article.get("topics", []) if str(topic).strip()]
-    return list(dict.fromkeys(inferred + supplied)) or ["news"]
+    # A topic the publisher supplied is never a passing mention.
+    return list(dict.fromkeys(inferred + supplied)) or ["news"], [topic for topic in passing if topic not in supplied]
 
 
 def _story_id(article_ids: list[str], title: str = "", day: str = "") -> str:
@@ -291,15 +308,28 @@ def _language(article: dict[str, Any]) -> str:
     return str(article.get("language", "en")).lower()
 
 
+def _decimal_text(token: str, language: str = "en") -> str:
+    """Digits with a "." decimal point and no grouping, keeping trailing zeros.
+
+    German and Dutch write "1.234,5", but their texts also carry English-style decimals ("3.31 Milliarden").
+    A "." is a thousands separator only when every group after it has exactly three digits.
+    """
+    number = token.replace("−", "-")
+    if language in {"de", "nl"}:
+        if "," in number:
+            number = number.replace(".", "").replace(",", ".")
+        elif re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", number):
+            number = number.replace(".", "")
+    else:
+        number = number.replace(",", "")
+    return number
+
+
 def _canonical_number(value: str, language: str = "en") -> str:
     token = _NUMBER.search(str(value))
     if not token:
         return ""
-    number = token.group(0).replace("−", "-")
-    if language in {"de", "nl"}:
-        number = number.replace(".", "").replace(",", ".")
-    else:
-        number = number.replace(",", "")
+    number = _decimal_text(token.group(0), language)
     try:
         exact = format(Decimal(number), "f")
     except InvalidOperation:
@@ -411,6 +441,17 @@ def _claims_contradict(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return len(shared) >= 2 or bool(shared & {"forecast", "exports", "represented", "budget", "rate", "inflation", "receipts", "stays", "overdue", "applications", "workers"})
 
 
+# Within one article, two figures for a measure are a range, a scenario or a before and after, unless
+# the article itself sets one apart as another source's number ("a separate estimate from ...").
+_ALTERNATIVE_SOURCE = re.compile(
+    r"\b(?:separate|another|alternative|competing|independent|second)\s+(?:\w+\s+)?"
+    r"(?:estimates?|figures?|counts?|tall(?:y|ies)|calculations?|forecasts?|projections?|surveys?)\b"
+    r"|\b(?:separate|weitere|andere|alternative)\s+(?:schätzung|zahl|zählung|prognose|berechnung)\w*"
+    r"|\b(?:aparte|afzonderlijke|andere|alternatieve)\s+(?:schatting|cijfers?|telling|raming|prognose)\w*",
+    re.I,
+)
+
+
 def _label_conflicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep all sources for connected competing claims in one stable conflict record."""
     peers = {fact["id"]: set() for fact in facts}
@@ -418,6 +459,10 @@ def _label_conflicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for index, fact in enumerate(facts):
         for j in range(index + 1, len(facts)):
             other = facts[j]
+            if fact.get("article_id") == other.get("article_id") and not (
+                _ALTERNATIVE_SOURCE.search(str(fact.get("statement", ""))) or _ALTERNATIVE_SOURCE.search(str(other.get("statement", "")))
+            ):
+                continue
             if quantities[index] != quantities[j] and _claims_contradict(fact, other):
                 peers[fact["id"]].add(other["id"])
                 peers[other["id"]].add(fact["id"])
@@ -485,10 +530,11 @@ def _offline_extract(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 fact_id = _fact_id(article_id, short_evidence, raw_number, unit, _language(article))
                 facts.append({"id": fact_id, "statement": short_evidence, "value": raw_number, "unit": unit, "evidence": short_evidence, "article_id": article_id, "language": _language(article), "source_sentence_hash": _sentence_hash(sentence), "conflict_status": "supported", "_claim_group": (article_id, left)})
         conflicts = _label_conflicts(facts)
-        topic_words = _topics(group)
+        topic_words, passing_topics = _topics(group)
         member_ids = [str(a.get("article_id", "")) for a in group]
         stories.append({"id": _story_id(member_ids, str(lead.get("title", "")), _day(lead)), "title": str(lead.get("title", "Untitled")), "articles": all_articles,
-                        "facts": facts, "topics": topic_words or ["news"], "publication_date": _day(lead), "conflicts": conflicts})
+                        "facts": facts, "topics": topic_words or ["news"], "publication_date": _day(lead), "conflicts": conflicts,
+                        **({"passing_topics": passing_topics} if passing_topics else {})})
     return stories
 
 
@@ -645,6 +691,7 @@ def _unspoken_story(story: dict[str, Any], spoken: set[str]) -> dict[str, Any]:
 class _StoryFeatures:
     story: dict[str, Any]
     matching_topics: set[str]
+    firm_topics: set[str]  # matching topics the story is about, not just mentions in passing
     relevance: dict[str, float]
     mentions: frozenset[str]
     recency: float
@@ -689,8 +736,10 @@ def _story_features(
             axis: sum(bool(pattern.search(content)) for pattern in patterns) / len(patterns)
             for axis, patterns in vocabulary.items()
         }
+        about = topics - {_topic_key(topic) for topic in story.get("passing_topics", ())}
         rows.append(_StoryFeatures(
-            story, {axis for axis in axes if _matches_topic(axis, topics)}, relevance, mentions,
+            story, {axis for axis in axes if _matches_topic(axis, topics)},
+            {axis for axis in axes if _matches_topic(axis, about)}, relevance, mentions,
             _recency(story, reference_day), novelty.get(story["id"], 0.0), trust_reason,
         ))
     return rows, set(vocabulary)
@@ -747,7 +796,10 @@ def _rank_profile(
         relevance = min(1.0, weighted_hits / relevance_total) if relevance_total else 0.0
         score = 0.4 * topic_match + 0.3 * relevance + 0.2 * feature.recency + 0.1 * feature.novelty
         why = "Sourced recent story"
-        related = matching or [
+        # The reason claims a match only for topics the story is about. A passing mention, or words in
+        # its figures that merely touch the interest, is reported as a mention.
+        firm = [(axis, weight) for axis, weight in matching if axis in feature.firm_topics]
+        related = firm or matching or [
             (axis, feature.relevance[axis] * weight) for axis, weight in relevance_weights
             if feature.relevance[axis] and weight > 0
         ]
@@ -756,7 +808,7 @@ def _rank_profile(
             for axis, amount in related:
                 contributions[axis] = contributions.get(axis, 0.0) + amount
             topics = sorted(contributions, key=lambda axis: (-contributions[axis], axis))[:3]
-            why = "Matches your interest in " + ", ".join(names.get(axis, axis) for axis in topics)
+            why = ("Matches your interest in " if firm else "Mentions ") + ", ".join(names.get(axis, axis) for axis in topics)
         if any(f.get("conflict_status") == "conflict" for f in story.get("facts", [])):
             why += ". Conflicting figures are labeled"
         rows.append((score, {
@@ -864,6 +916,10 @@ def _script_is_valid(
 
 
 _MEASURE_LABELS = (
+    # Listener-facing names for what a figure measures. Specific phrases come before general ones:
+    # when two phrases sit equally close to a figure, the earlier entry names it.
+    (r"jobs?\s+(?:were\s+)?represented|represented\s+jobs?|vertretene\s+arbeitsplätze|vertegenwoordigde\s+banen",
+     {"en": "jobs represented", "de": "vertretene Arbeitsplätze", "nl": "vertegenwoordigde banen"}),
     (r"revenue|turnover|umsatz|omzet", {"en": "revenue", "de": "Umsatz", "nl": "omzet"}),
     (r"(?:operating )?profit|gewinn|winst", {"en": "profit", "de": "Gewinn", "nl": "winst"}),
     (r"growth forecast|wachstumsprognose|groeiverwachting", {"en": "growth forecast", "de": "Wachstumsprognose", "nl": "groeiverwachting"}),
@@ -871,55 +927,329 @@ _MEASURE_LABELS = (
     (r"basis points?|basispunkte|basispunten", {"en": "rate change", "de": "Zinsänderung", "nl": "renteverandering"}),
     (r"inflati(?:on|e)|teuerung", {"en": "inflation", "de": "Inflation", "nl": "inflatie"}),
     (r"pay rise|wage|lohn|loon", {"en": "pay increase", "de": "Lohnerhöhung", "nl": "loonsverhoging"}),
-    (r"jobs?|arbeitsplätze|banen|workers?|arbeitnehmer|werknemers", {"en": "job or worker count", "de": "Beschäftigtenzahl", "nl": "aantal banen"}),
-    (r"application|anträge|aanvragen|equipment grant|investitionszuschuss|investeringssubsidie", {"en": "grant applications", "de": "Förderanträge", "nl": "subsidieaanvragen"}),
+    (r"jobs?|arbeitsplätze|banen", {"en": "jobs", "de": "Arbeitsplätze", "nl": "banen"}),
+    (r"workers?|arbeitnehmer|werknemers", {"en": "workers", "de": "Arbeitnehmer", "nl": "werknemers"}),
+    (r"applications?|anträge|aanvragen", {"en": "applications", "de": "Anträge", "nl": "aanvragen"}),
+    (r"requesting|requested|beantragt\w*|aangevraagd", {"en": "amount requested", "de": "beantragter Betrag", "nl": "aangevraagd bedrag"}),
+    (r"budget", {"en": "budget", "de": "Budget", "nl": "budget"}),
     (r"saving rate|savings|sparquote|spaarquote", {"en": "saving rate", "de": "Sparquote", "nl": "spaarquote"}),
     (r"food prices|lebensmittelpreise|voedselprijzen", {"en": "food prices", "de": "Lebensmittelpreise", "nl": "voedselprijzen"}),
     (r"solar capacity|solarkapazität|photovoltaikkapazität|zonnecapaciteit", {"en": "solar capacity", "de": "Solarkapazität", "nl": "zonnecapaciteit"}),
     (r"per megawatt|weighted average price|contract bid", {"en": "contract price", "de": "Vertragspreis", "nl": "contractprijs"}),
     (r"tourism receipts|tourismus|toerisme|touristische einnahmen", {"en": "tourism receipts", "de": "Tourismuseinnahmen", "nl": "toeristische inkomsten"}),
     (r"overnight stays|nächtigungen|overnachtingen", {"en": "overnight stays", "de": "Übernachtungen", "nl": "overnachtingen"}),
-    (r"credit line|loan guarantee|kreditlinie|kredietlijn|loans?|kredite|leningen", {"en": "business credit", "de": "Unternehmenskredit", "nl": "bedrijfskrediet"}),
+    (r"credit line|kreditlinie|kredietlijn", {"en": "credit line", "de": "Kreditlinie", "nl": "kredietlijn"}),
+    (r"loans?\s+(?:will be\s+|are\s+)?capped at|loan cap", {"en": "loan cap", "de": "Kreditobergrenze", "nl": "kredietplafond"}),
+    (r"capped at|cap of|ceiling of|obergrenze|plafond", {"en": "cap", "de": "Obergrenze", "nl": "plafond"}),
+    (r"farm loans?(?=[^.;]*(?:overdue|late))|agrarkredite?(?=[^.;]*überfällig)|landbouwleningen(?=[^.;]*achterstallig)",
+     {"en": "overdue farm loans", "de": "überfällige Agrarkredite", "nl": "achterstallige landbouwleningen"}),
+    (r"overdue|überfällig|achterstallig", {"en": "overdue threshold", "de": "Überfälligkeitsgrenze", "nl": "achterstandsgrens"}),
+    (r"loans?|kredite|leningen", {"en": "loans", "de": "Kredite", "nl": "leningen"}),
     (r"waiting time|wartezeit|wachttijd", {"en": "waiting time", "de": "Wartezeit", "nl": "wachttijd"}),
-    (r"overdue|überfällig|achterstallig", {"en": "overdue farm loans", "de": "überfällige Agrarkredite", "nl": "achterstallige landbouwleningen"}),
 )
+# A figure is described by the closest phrase in its own sentence. Punctuation that ends a clause,
+# or a long stretch of unrelated words, means the phrase belongs to something else.
+_LABEL_BOUNDARY = re.compile(
+    r"[,;:()–—]|[.!?](?:\s|$)|\s-\s"
+    r"|\b(?:while|whilst|whereas|but|although|though|however|which|aber|während|obwohl|maar|terwijl|hoewel)\b",
+    re.I,
+)
+_MAX_LABEL_GAP_WORDS = 8
+_PREVIOUS_BEFORE = re.compile(r"\b(?:from|compared (?:with|to)|versus|gegenüber|vergeleken met|ten opzichte van)\s+$")
+_RANGE_FROM_BEFORE = re.compile(r"\b(?:von|van)\s+$")
+_RANGE_TO_AFTER = re.compile(r"\s*(?:auf|bis|naar|tot|to)\s+[−€\d-]")
+_ALSO_BEFORE = re.compile(r"\b(?:and|und|en|or|oder)\s+$")
+_RANGE_JOIN = re.compile(r"\s*(?:to|and|or|auf|bis|und|oder|naar|tot|en)\s+(?=[−€\d-])")
+# The figure pattern cuts "Millionen" short at "million", so an "en" may remain before the currency.
+_CURRENCY_AFTER = re.compile(r"(?:en)?\s+(?:of\s+)?(crowns?|kronen|euros?|euro|dollars?|pounds?)\b")
+_CURRENCY_NAMES = {
+    "crown": "crown", "crowns": "crown", "kronen": "crown", "euro": "euro", "euros": "euro",
+    "dollar": "dollar", "dollars": "dollar", "pound": "pound", "pounds": "pound",
+}
+_CURRENCY_SYMBOLS = {"$": "dollar", "£": "pound", "€": "euro"}
+# A range ("2-3%", "between 2 and 3 percent") is one claim, not two figures.
+_RANGE_DASH = re.compile(r"\s*(?:[-–—]|to|bis|tot)\s*[$£€]?\s*")
+_RANGE_AND = re.compile(r"\s*(?:and|und|en)\s*[$£€]?\s*")
+_BETWEEN_BEFORE = re.compile(r"\b(?:between|zwischen|tussen)\s+[$£€]?\s*$")
+# The figure pattern does not know every scale or multiple. A bare number followed by one ("165k", "$1.5T",
+# "18.5x", "25 bps") would be spoken a thousand times too small or without its meaning, so it is not spoken.
+_UNRECOGNISED_SUFFIX = re.compile(
+    r"[a-zA-Z×¢]|\s+(?:k|m|b|t|bn|mn|tn|trn|mio|mrd|mln|mld|x|trillion|thousand|hundred|bps?|bips|cents?|pence|times|fold|pct)\b",
+    re.I,
+)
+_PERCENTAGE_POINTS = re.compile(r"age\s+points?\b")
+# Measures that are themselves percentages. A percentage beside "revenue" or "profit" is a change or a ratio.
+_PERCENT_MEASURES = frozenset({
+    "growth forecast", "policy rate", "inflation", "pay increase", "saving rate", "food prices", "overdue farm loans",
+})
+_PER_HOUR_AFTER = re.compile(r"\s+per\s+megawatt[- ]hour\b")
+_PER_HOUR = " per megawatt-hour"
+_PREVIOUS_LABEL = {"en": "previous {}", "de": "{} zuvor", "nl": "{} eerder"}
 
 
-def _measure_label(fact: dict[str, Any], source_language: str, language: str) -> str:
-    text = str(fact.get("evidence", "")).lower()
-    quantity = _value_unit(fact.get("value", ""), fact.get("unit", ""), source_language)
-    amounts = list(_NUM.finditer(text))
-    candidates = []
-    for pattern, labels in _MEASURE_LABELS:
+class _Amount(NamedTuple):
+    start: int
+    end: int
+    quantity: tuple[str, str]  # canonical number and the unit as written, which may be empty
+    previous: bool  # the earlier value of a change: "from 1.8%", "von 1,8 auf 1,4 Prozent"
+    usable: bool  # False for a range endpoint, or a number whose scale or multiple is not understood
+
+
+class _Figure(NamedTuple):
+    label: str | None  # None when the evidence names no measure for this figure
+    unit: str  # canonical unit, completed from the evidence when the figure leaves it out
+    slot: tuple[int, bool] | None  # language-independent identity of the label: catalogue entry, previous value
+    speakable: bool  # False when it cannot be said faithfully, so it is left out of the narration
+
+
+def _evidence_amounts(text: str, language: str) -> list[_Amount]:
+    amounts = []
+    for match in _NUM.finditer(text):
+        number = _NUMBER.search(match.group(0))
+        if not number:
+            continue
+        raw = number.group(0)
+        unit = match.group(0)[number.end():].strip()
+        # Calendar years name a period, not an amount.
+        if raw.isdigit() and len(raw) == 4 and 1900 <= int(raw) <= 2100 and not unit:
+            continue
+        before, after = text[:match.start()], text[match.end():]
+        previous = bool(_PREVIOUS_BEFORE.search(before)) or bool(_RANGE_FROM_BEFORE.search(before) and _RANGE_TO_AFTER.match(after))
+        quantity = (_canonical_number(raw, language), _canonical_unit(unit))
+        misunderstood = (not quantity[1] and bool(_UNRECOGNISED_SUFFIX.match(after))) or (
+            quantity[1] == "percent" and bool(_PERCENTAGE_POINTS.match(after))
+        )
+        amounts.append(_Amount(match.start(), match.end(), quantity, previous, not misunderstood))
+    for index in range(len(amounts) - 1):
+        first, second = amounts[index], amounts[index + 1]
+        between = text[first.end:second.start]
+        # "2 to 3 percent" is a range; "rose 5% to 4.2 billion" is not, because the units differ.
+        if not first.previous and first.quantity[1] in {"", second.quantity[1]} and (
+            _RANGE_DASH.fullmatch(between)
+            or (_RANGE_AND.fullmatch(between) and _BETWEEN_BEFORE.search(text[:first.start]))
+        ):
+            amounts[index], amounts[index + 1] = first._replace(usable=False), second._replace(usable=False)
+    return amounts
+
+
+def _complete_unit(text: str, amount: _Amount) -> str:
+    """Canonical unit of an amount, filling in what the sentence says elsewhere.
+
+    "von 1,8 auf 1,4 Prozent" shares one unit, "2.3 billion crowns" names its currency after the
+    scale word and "48 crowns per megawatt-hour" its rate. Nothing is added that the text lacks.
+    """
+    unit, end = amount.quantity[1], amount.end
+    # "$3.31 billion", "£5", "€ 40 million": the symbol names the currency.
+    symbol = text[amount.start] if text[amount.start:amount.start + 1] == "€" else text[:amount.start].rstrip()[-1:]
+    symbol_currency = _CURRENCY_SYMBOLS.get(symbol, "")
+    if not unit:
+        joined = _RANGE_JOIN.match(text, end)
+        following = _NUM.match(text, joined.end()) if joined else None
+        number = _NUMBER.search(following.group(0)) if following else None
+        shared = _canonical_unit(following.group(0)[number.end():].strip()) if number else ""
+        return shared or symbol_currency
+    if unit in {"million", "billion"}:
+        if currency := _CURRENCY_AFTER.match(text, end):
+            unit, end = f"{unit} {_CURRENCY_NAMES[currency.group(1)]}", currency.end()
+        elif symbol_currency:
+            unit = f"{unit} {symbol_currency}"
+    if unit.rsplit(" ", 1)[-1] in set(_CURRENCY_NAMES.values()) and _PER_HOUR_AFTER.match(text, end):
+        unit += _PER_HOUR
+    return unit
+
+
+def _label_gap(text: str, span: tuple[int, int], amount: _Amount) -> str | None:
+    """The words between a phrase and a figure, or None if they cannot belong together."""
+    if span[1] <= amount.start:
+        gap = text[span[1]:amount.start]
+    elif amount.end <= span[0]:
+        gap = text[amount.end:span[0]]
+    else:
+        gap = ""
+    # A figure standing between them ("von 1,8 auf") is a word, not punctuation.
+    gap = _NUM.sub(" # ", gap)
+    if _LABEL_BOUNDARY.search(gap) or len(gap.split()) > _MAX_LABEL_GAP_WORDS:
+        return None
+    return gap
+
+
+def _hyphenated(text: str, span: tuple[int, int]) -> bool:
+    """A phrase joined to another word by a hyphen is part of a compound: "Kurs-Gewinn", "cost-to-revenue"."""
+    start, end = span
+    return (start >= 2 and text[start - 1] == "-" and text[start - 2].isalnum()) or (
+        text[end:end + 1] == "-" and text[end + 1:end + 2].isalnum()
+    )
+
+
+def _owned_labels(text: str, amounts: list[_Amount]) -> dict[_Amount, int]:
+    """Catalogue entry naming each figure. A phrase names only the figure closest to it."""
+    firm = [amount for amount in amounts if amount.usable and not amount.previous]
+    best: dict[_Amount, tuple[int, int]] = {}
+    for index, (pattern, labels) in enumerate(_MEASURE_LABELS):
+        candidates = [a for a in firm if a.quantity[1] != "percent" or labels["en"] in _PERCENT_MEASURES]
+        if not candidates:
+            continue
         for match in re.finditer(pattern, text):
-            # Anchor each label to the nearest quantity, so another figure
-            # in the same sentence cannot inherit this measure's label.
-            closest = min(
-                amounts,
-                key=lambda amount: max(0, match.start() - amount.end(), amount.start() - match.end()),
-            )
-            if _value_unit(closest.group(0), language=source_language) == quantity:
-                distance = max(0, match.start() - closest.end(), closest.start() - match.end())
-                candidates.append((distance, labels.get(language, labels["en"])))
-    if candidates:
-        return min(candidates, key=lambda candidate: candidate[0])[1]
-    return {"de": "berichtete Kennzahl", "nl": "gerapporteerd cijfer"}.get(language, "reported measure")
+            span = match.span()
+            if _hyphenated(text, span):
+                continue
+            # The closest figure it can be bound to. Equally close figures: a phrase leading into a figure
+            # ("requesting 96 million") names the later one.
+            options = [
+                ((max(0, span[0] - a.end, a.start - span[1]), a.start < span[1]), a, gap)
+                for a in candidates if (gap := _label_gap(text, span, a)) is not None
+            ]
+            if not options:
+                continue
+            _, owner, gap = min(options, key=lambda option: option[0])
+            if owner not in best or (len(gap), index) < best[owner]:
+                best[owner] = (len(gap), index)
+    return {amount: found[1] for amount, found in best.items()}
+
+
+def _describe_figure(fact: dict[str, Any], source_language: str, language: str) -> _Figure:
+    return _describe_evidence(
+        str(fact.get("evidence", "")), str(fact.get("value", "")), str(fact.get("unit", "")), source_language, language,
+    )
+
+
+@lru_cache(maxsize=8192)
+def _describe_evidence(evidence: str, value: str, unit: str, source_language: str, language: str) -> _Figure:
+    """Name what a verified figure measures using only the words of its cited evidence."""
+    text = evidence.lower()
+    expected = _value_unit(value, unit, source_language)
+    amounts = _evidence_amounts(text, source_language)
+    target = next((amount for amount in amounts if amount.quantity == expected), None)
+    if target is None:
+        return _Figure(None, expected[1], None, False)
+    unit = _complete_unit(text, target)
+    if not target.usable:
+        return _Figure(None, unit, None, False)
+    owned = _owned_labels(text, amounts)
+    index = owned.get(target)
+    previous = target.previous
+    if previous:
+        # The earlier value of a change is the same measure as the figure it is compared with.
+        others = [a for a in amounts if not a.previous and a in owned and _complete_unit(text, a) == unit]
+        if others:
+            nearest = min(others, key=lambda a: max(0, target.start - a.end, a.start - target.end))
+            index = owned[nearest]
+    elif index is None and _ALSO_BEFORE.search(text[:target.start]):
+        # "a 4.2% pay rise in the first year and 3.0% in the second": the same measure again.
+        earlier = [a for a in amounts if a.end <= target.start and a in owned and _complete_unit(text, a) == unit]
+        if earlier and not re.search(r"[.;]", text[earlier[-1].end:target.start]):
+            index = owned[earlier[-1]]
+    if index is None:
+        # Unnamed, but a unit says what it counts. An earlier value on its own would mislead.
+        return _Figure(None, unit, None, bool(unit) and not previous)
+    labels = _MEASURE_LABELS[index][1]
+    label = labels.get(language, labels["en"])
+    if previous:
+        label = _PREVIOUS_LABEL.get(language, _PREVIOUS_LABEL["en"]).format(label)
+    return _Figure(label, unit, (index, previous), True)
 
 
 def _spoken_number(value: str, source_language: str, output_language: str) -> str:
     token = _NUMBER.search(value).group(0)
-    if (source_language in {"de", "nl"}) == (output_language in {"de", "nl"}):
+    source_comma, output_comma = source_language in {"de", "nl"}, output_language in {"de", "nl"}
+    plain = _decimal_text(token, source_language)
+    # An English-style decimal inside German or Dutch text ("3.31") still has to be written with a comma there.
+    english_decimal = source_comma and "," not in token and "." in plain
+    if source_comma == output_comma and not english_decimal:
         return token
-    if output_language in {"de", "nl"}:
-        return token.replace(",", "").replace(".", ",")
-    return token.replace(".", "").replace(",", ".")
+    return plain.replace(".", ",") if output_comma else plain
 
 
-_NARRATION_UNITS = (
-    ({"percent"}, {"en": "percent", "de": "Prozent", "nl": "procent"}),
-    ({"basis points", "basispunkte", "basispunten"}, {"en": "basis points", "de": "Basispunkte", "nl": "basispunten"}),
-    ({"applications", "application", "anträge", "aanvragen"}, {"en": "applications", "de": "Anträge", "nl": "aanvragen"}),
+# Spoken forms of the units figures are reported in: (surface forms, {language: (singular, plural)}).
+_UNIT_NOUNS = (
+    ({"percent"}, {"en": ("percent", "percent"), "de": ("Prozent", "Prozent"), "nl": ("procent", "procent")}),
+    ({"basis points", "basis point", "basispunkte", "basispunkt", "basispunten", "basispunt"},
+     {"en": ("basis point", "basis points"), "de": ("Basispunkt", "Basispunkte"), "nl": ("basispunt", "basispunten")}),
+    ({"applications", "application", "anträge", "antrag", "aanvragen", "aanvraag"},
+     {"en": ("application", "applications"), "de": ("Antrag", "Anträge"), "nl": ("aanvraag", "aanvragen")}),
+    ({"workers", "worker", "arbeitnehmer", "werknemers", "werknemer"},
+     {"en": ("worker", "workers"), "de": ("Arbeitnehmer", "Arbeitnehmer"), "nl": ("werknemer", "werknemers")}),
+    ({"jobs", "job", "arbeitsplätze", "arbeitsplatz", "banen", "baan"},
+     {"en": ("job", "jobs"), "de": ("Arbeitsplatz", "Arbeitsplätze"), "nl": ("baan", "banen")}),
+    ({"days", "day", "tage", "tag", "dagen", "dag"}, {"en": ("day", "days"), "de": ("Tag", "Tage"), "nl": ("dag", "dagen")}),
+    ({"hours", "hour", "stunden", "stunde", "uren", "uur"}, {"en": ("hour", "hours"), "de": ("Stunde", "Stunden"), "nl": ("uur", "uren")}),
+    ({"years", "year", "jahre", "jahr", "jaren", "jaar"}, {"en": ("year", "years"), "de": ("Jahr", "Jahre"), "nl": ("jaar", "jaren")}),
+    ({"meetings", "meeting", "sitzungen", "sitzung", "vergaderingen", "vergadering"},
+     {"en": ("meeting", "meetings"), "de": ("Sitzung", "Sitzungen"), "nl": ("vergadering", "vergaderingen")}),
+    ({"megawatts", "megawatt"}, {"en": ("megawatt", "megawatts"), "de": ("Megawatt", "Megawatt"), "nl": ("megawatt", "megawatt")}),
+    ({"megawatt-hours", "megawatt-hour"},
+     {"en": ("megawatt-hour", "megawatt-hours"), "de": ("Megawattstunde", "Megawattstunden"), "nl": ("megawattuur", "megawattuur")}),
+    ({"crown", "crowns", "kronen", "krone", "kroon"}, {"en": ("crown", "crowns"), "de": ("Krone", "Kronen"), "nl": ("kroon", "kronen")}),
+    ({"euro", "euros", "eur"}, {"en": ("euro", "euros"), "de": ("Euro", "Euro"), "nl": ("euro", "euro")}),
+    ({"dollar", "dollars"}, {"en": ("dollar", "dollars"), "de": ("Dollar", "Dollar"), "nl": ("dollar", "dollar")}),
+    ({"pound", "pounds"}, {"en": ("pound", "pounds"), "de": ("Pfund", "Pfund"), "nl": ("pond", "pond")}),
 )
+_UNIT_SCALES = (
+    ({"million", "millionen", "miljoen", "mn"}, {"en": ("million", "million"), "de": ("Million", "Millionen"), "nl": ("miljoen", "miljoen")}),
+    ({"billion", "milliarden", "miljard", "bn"}, {"en": ("billion", "billion"), "de": ("Milliarde", "Milliarden"), "nl": ("miljard", "miljard")}),
+)
+_PER_HOUR_SPOKEN = {"en": _PER_HOUR, "de": " pro Megawattstunde", "nl": " per megawattuur"}
+
+
+def _parse_unit(unit: str) -> tuple[int | None, int | None, str] | None:
+    """Scale word, noun and rate of a unit, or None for an unfamiliar one."""
+    suffix = ""
+    if unit.endswith(_PER_HOUR):
+        unit, suffix = unit[:-len(_PER_HOUR)], _PER_HOUR
+    words = unit.split()
+    scale = next((i for i, (aliases, _) in enumerate(_UNIT_SCALES) if words and words[0] in aliases), None)
+    if scale is not None:
+        words = words[1:]
+    noun = next((i for i, (aliases, _) in enumerate(_UNIT_NOUNS) if " ".join(words) in aliases), None) if words else None
+    if (words and noun is None) or (scale is None and noun is None):
+        return None
+    return scale, noun, suffix
+
+
+def _unit_identity(unit: str) -> Any:
+    """Equal for the same unit in any language: "Basispunkte" and "basis points"."""
+    return _parse_unit(unit) or unit
+
+
+def _unit_phrase(unit: str, number: str, language: str) -> tuple[str, set[str]] | None:
+    """Spoken unit in the output language and its bare noun forms, or None for an unfamiliar unit."""
+    parsed = _parse_unit(unit)
+    if parsed is None:
+        return None
+    scale_index, noun_index, suffix = parsed
+    single = number == "1"
+    parts = []
+    if scale_index is not None:
+        forms = _UNIT_SCALES[scale_index][1]
+        parts.append(forms.get(language, forms["en"])[0 if single else 1])
+    noun: tuple[str, str] | None = None
+    if noun_index is not None:
+        forms = _UNIT_NOUNS[noun_index][1]
+        noun = forms.get(language, forms["en"])
+        # With a scale word the noun is plural ("1 million crowns"); alone it follows the number.
+        parts.append(noun[0 if single and scale_index is None else 1])
+    bare = {form.casefold() for form in noun} if noun and scale_index is None and not suffix else set()
+    return " ".join(parts) + (_PER_HOUR_SPOKEN.get(language, _PER_HOUR) if suffix else ""), bare
+
+
+def _spoken_amount(fact: dict[str, Any], figure: _Figure, source_language: str, language: str) -> str:
+    number = _spoken_number(str(fact["value"]), source_language, language)
+    canonical = _value_unit(fact["value"], "", source_language)[0]
+    phrase = _unit_phrase(figure.unit, canonical, language)
+    if phrase is None:
+        return f"{number} {fact.get('unit') or figure.unit}".strip()
+    unit, nouns = phrase
+    # "Applications, 310." rather than "Applications, 310 applications."
+    if figure.label and nouns & set(figure.label.casefold().split()):
+        unit = ""
+    return f"{number} {unit}".strip()
+
+
+# A story is read as a few claims, not every number in it.
+_MAX_SPOKEN_CLAIMS = 4
+# Figures read out without a measure name, only for a story in which no figure can be named.
+_UNNAMED_FIGURE_LIMIT = 3
+_UNNAMED_FIGURE = {"en": "The report gives {}.", "de": "Der Bericht nennt {}.", "nl": "Het bericht noemt {}."}
 
 _NARRATION_FRAMES = {
     "en": {"beginner": "In plain terms, here’s what the sources report.", "intermediate": "Here’s what the sources report.", "advanced": "Here are the reported measures."},
@@ -934,10 +1264,9 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
     duration = max(1, int(profile.get("duration", 5) or 5))
     output_language = str(profile.get("language", "en")).lower()
     expertise = str(profile.get("expertise", "intermediate")).lower()
+    # Expertise sets the introduction; every claim is a "Label, amount." sentence whatever the style.
+    # The style only guides a live model's arrangement.
     style = str(profile.get("style") or "neutral")
-    style_words = style.lower()
-    lead_with_figures = any(phrase in style_words for phrase in ("lead with", "concise", "focus on drivers"))
-    plain_language = any(phrase in style_words for phrase in ("plain language", "everyday decisions"))
     frame = _NARRATION_FRAMES.get(output_language, _NARRATION_FRAMES["en"])
     introduction = frame.get(expertise, frame["intermediate"])
     for story in ranked:
@@ -945,43 +1274,58 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
         facts = _verified_facts(story)
         if not facts:
             continue
-        ids = list(dict.fromkeys(str(f["id"]) for f in facts))
-        cited_ids = list(dict.fromkeys(str(f.get("article_id")) for f in facts))
-        sources = [by_id[aid] for aid in cited_ids if aid in by_id]
-        conflicted = any(f.get("conflict_status") == "conflict" for f in facts)
         source_languages = {
             fact["id"]: str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en"))
             for fact in facts
         }
-        # Equivalent source facts share a spoken measure and retain all of
-        # their citations. Equal values for different measures stay distinct.
-        preferred = sorted(facts, key=lambda fact: source_languages[fact["id"]] != output_language)
+        # Equivalent source facts share one spoken claim and keep all of their citations. Equal values
+        # for different measures stay distinct.
+        preferred = sorted(range(len(facts)), key=lambda n: source_languages[facts[n]["id"]] != output_language)
+        groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for n in preferred:
+            fact = facts[n]
+            source_language = source_languages[fact["id"]]
+            figure = _describe_figure(fact, source_language, output_language)
+            if not figure.speakable:
+                continue
+            value = _value_unit(fact["value"], "", source_language)[0]
+            group = groups.setdefault((figure.slot, value, _unit_identity(figure.unit)), {
+                "fact": fact, "figure": figure, "source_language": source_language, "first": n, "members": [],
+            })
+            group["members"].append(fact)
+            group["first"] = min(group["first"], n)
+        # A figure whose evidence names no measure is not spoken under an invented label. Only when nothing
+        # in the story can be named are the figures read out, with their units, as plain reports.
+        candidates, limit = [g for g in groups.values() if g["figure"].label], _MAX_SPOKEN_CLAIMS
+        if not candidates:
+            candidates, limit = list(groups.values()), _UNNAMED_FIGURE_LIMIT
+        if not candidates:
+            continue
+
+        def importance(group: dict[str, Any]) -> tuple[int, int]:
+            conflicting = any(member.get("conflict_status") == "conflict" for member in group["members"])
+            return (0 if conflicting else 1 if group["figure"].label and group["figure"].unit else 2, group["first"])
+
+        # Conflicting values, then named figures with a unit. The choice depends only on the facts, so every
+        # language, expertise and angle of a prepared summary cites the same ones, in source order.
+        chosen = sorted(sorted(candidates, key=importance)[:limit], key=lambda group: group["first"])
         approved = [introduction]
         claim_facts: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str]] = set()
-        for fact in preferred:
-            source_language = source_languages[fact["id"]]
-            value, unit = _value_unit(fact["value"], fact.get("unit", ""), source_language)
-            label = _measure_label(fact, source_language, output_language)
-            spoken_unit = next(
-                (labels.get(output_language, labels["en"]) for aliases, labels in _NARRATION_UNITS if unit in aliases),
-                str(fact.get("unit") or unit),
-            )
-            key = (label, value, spoken_unit.casefold())
-            if key in seen:
-                continue
-            seen.add(key)
+        for group in chosen:
+            fact, figure = group["fact"], group["figure"]
             claim_facts.append(fact)
-            number = _spoken_number(str(fact["value"]), source_language, output_language)
-            amount = f"{number} {spoken_unit}".strip()
-            heading = label[:1].upper() + label[1:]
-            if lead_with_figures:
-                approved.append(f"{amount} ({label}).")
-            elif plain_language:
-                verb = {"de": "lag bei", "nl": "was"}.get(output_language, "was")
-                approved.append(f"{heading} {verb} {amount}.")
+            amount = _spoken_amount(fact, figure, group["source_language"], output_language)
+            if figure.label:
+                approved.append(f"{figure.label[:1].upper()}{figure.label[1:]}, {amount}.")
             else:
-                approved.append(f"{heading}, {amount}.")
+                approved.append(_UNNAMED_FIGURE.get(output_language, _UNNAMED_FIGURE["en"]).format(amount))
+        # Only facts that are spoken, or equal to one that is, are cited.
+        members = {id(member) for group in chosen for member in group["members"]}
+        spoken = [fact for fact in facts if id(fact) in members]
+        ids = list(dict.fromkeys(str(f["id"]) for f in spoken))
+        cited_ids = list(dict.fromkeys(str(f.get("article_id")) for f in spoken))
+        sources = [by_id[aid] for aid in cited_ids if aid in by_id]
+        conflicted = any(f.get("conflict_status") == "conflict" for f in spoken)
         # Shared summaries emphasize the listener's interests. A stable sort keeps
         # the source order when interests do not distinguish the claims.
         interests = [(_topic_key(topic), weight) for topic, weight in _positive_topic_weights(profile).items()]
@@ -1009,7 +1353,7 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
                 text = " ".join(_script_sentences(candidate))
         if conflicted and conflict_text.lower() not in text.lower():
             text += " " + conflict_text
-        result.append({"id": "segment-" + story["id"], "text": text, "fact_ids": ids, "sources": sources, "conflict": conflicted, "conflict_labels": list(dict.fromkeys(f.get("conflict_label") for f in facts if f.get("conflict_label")))})
+        result.append({"id": "segment-" + story["id"], "text": text, "fact_ids": ids, "sources": sources, "conflict": conflicted, "conflict_labels": list(dict.fromkeys(f.get("conflict_label") for f in spoken if f.get("conflict_label")))})
         if len(result) >= duration:
             break
     return result
