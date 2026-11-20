@@ -66,7 +66,7 @@ const applySpeed = (element: HTMLAudioElement | null, speed: number) => {
 type Expressiveness = 'calm' | 'balanced' | 'expressive';
 const EXPRESSIVENESS: { id: Expressiveness; label: string }[] = [{ id: 'calm', label: 'Calm' }, { id: 'balanced', label: 'Balanced' }, { id: 'expressive', label: 'Expressive' }];
 const EXPRESSIVENESS_KEY = 'liquid-briefing-expressiveness';
-const storedExpressiveness = (): Expressiveness => { const value = readSetting(EXPRESSIVENESS_KEY); return EXPRESSIVENESS.some(level => level.id === value) ? value as Expressiveness : 'balanced'; };
+const storedExpressiveness = (): Expressiveness => { const value = readSetting(EXPRESSIVENESS_KEY); return EXPRESSIVENESS.some(level => level.id === value) ? value as Expressiveness : 'expressive'; };
 // Scheduled delivery needs the n8n workflows, a public HTTPS backend and durable storage; hide it unless explicitly enabled.
 const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE === '1';
 const defaultTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';

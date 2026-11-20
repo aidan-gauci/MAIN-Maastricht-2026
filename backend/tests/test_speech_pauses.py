@@ -29,8 +29,10 @@ class SpeechPauseTest(unittest.TestCase):
             with TestClient(app) as client:
                 body = {"listener_id": str(uuid.uuid4()), "profile_id": "everyday"}
                 made = client.post("/api/briefings", json={**body, "expressiveness": "expressive"})
+                default = client.post("/api/briefings", json={"listener_id": str(uuid.uuid4()), "profile_id": "markets"})
                 bad = client.post("/api/briefings", json={**body, "expressiveness": "loud"})
         self.assertEqual(made.json()["expressiveness"], "expressive")
+        self.assertEqual(default.json()["expressiveness"], "expressive")
         self.assertEqual(bad.status_code, 422)
 
     def test_pauses_follow_the_intro_and_each_figure_without_splitting_decimals(self):
