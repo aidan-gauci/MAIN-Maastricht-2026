@@ -163,14 +163,16 @@ class Providers:
         max_chars = max(4000, int(os.getenv("LIQUID_LIVE_BATCH_CHARS", "48000")))
         if len(payload_text) > max_chars:
             raise ValueError("Provider extraction batch exceeds configured character limit")
-        max_output_tokens = max(512, int(os.getenv("LIQUID_LIVE_EXTRACTION_OUTPUT_TOKENS", "4000")))
+        # A dense 9-article batch needed more than 4,000 output tokens and was cut off mid-JSON, which
+        # aborted a full import. gpt-4o-mini allows 16,384 output tokens; billing is per token used.
+        max_output_tokens = min(16384, max(512, int(os.getenv("LIQUID_LIVE_EXTRACTION_OUTPUT_TOKENS", "16000"))))
         response = client.chat.completions.create(
             model=model,
             temperature=0,
             max_tokens=max_output_tokens,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "Extract concise factual news clusters. Return JSON {stories:[{title,topics,publication_date,facts:[{value,unit,evidence,article_id}]}]}. Each fact must contain one reported numeric quantity, the exact unit, an exact evidence span of at most 160 characters containing that quantity and measure, and an existing article_id. Skip dates, IDs, and unsupported quantities. Preserve numeric values and units exactly. Merge duplicate coverage when clearly the same event; keep different reported values as separate claims and do not resolve disagreements. Never invent context or advise."},
+                {"role": "system", "content": "Extract concise factual news clusters. Return JSON {stories:[{title,topics,publication_date,facts:[{value,unit,evidence,article_id}]}]}. Each fact must contain one reported numeric quantity, the exact unit, an exact evidence span of at most 160 characters containing that quantity and measure, and an existing article_id. Skip dates, IDs, and unsupported quantities. Return at most 8 facts per article, choosing its most newsworthy figures. Preserve numeric values and units exactly. Merge duplicate coverage when clearly the same event; keep different reported values as separate claims and do not resolve disagreements. Never invent context or advise."},
                 {"role": "user", "content": payload_text},
             ],
         )
