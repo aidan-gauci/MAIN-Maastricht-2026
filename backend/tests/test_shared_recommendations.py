@@ -12,6 +12,7 @@ from backend.app.config import DEMO
 from backend.app.importer import read_articles
 from backend.app.service import generate_briefing, prepare_corpus, render_audio
 from backend.app.storage import Store
+from backend.app.pipeline import _NARRATION_FRAMES
 from backend.app.summaries import prepare_summaries
 
 
@@ -20,6 +21,8 @@ def profile(name, weights):
         "name": name, "topic_weights": weights, "language": "en", "expertise": "intermediate",
         "duration": 3,
     }
+
+INTRO = _NARRATION_FRAMES["en"]["intermediate"]
 
 
 class SharedRecommendationTest(unittest.TestCase):
@@ -48,8 +51,8 @@ class SharedRecommendationTest(unittest.TestCase):
         rate_segment = rates["segments"][0]
         inflation_segment = inflation["segments"][0]
         self.assertEqual(rate_segment["id"], inflation_segment["id"])
-        self.assertIn("measures: policy rate: 3.25 %", rate_segment["text"])
-        self.assertIn("measures: inflation: 2.6 %", inflation_segment["text"])
+        self.assertIn(f"{INTRO} Policy rate, 3.25 percent.", rate_segment["text"])
+        self.assertIn(f"{INTRO} Inflation, 2.6 percent.", inflation_segment["text"])
         self.assertEqual(
             {key: value for key, value in rate_segment.items() if key != "text"},
             {key: value for key, value in inflation_segment.items() if key != "text"},
@@ -67,7 +70,7 @@ class SharedRecommendationTest(unittest.TestCase):
             after = generate_briefing(worker, listener)
 
         self.assertEqual(before["stories"][0]["id"], after["stories"][0]["id"])
-        self.assertIn("policy rate: 3.50 %", after["segments"][0]["text"])
+        self.assertIn("Policy rate, 3.50 percent.", after["segments"][0]["text"])
         self.assertNotEqual(before["segments"][0]["fact_ids"], after["segments"][0]["fact_ids"])
         self.assertEqual(before, self.store.briefing(before["id"]))
 

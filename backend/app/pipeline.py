@@ -119,7 +119,7 @@ _RELEVANCE_TERMS = {
 }
 
 
-_TOPIC_ALIASES = {"rate": "rates", "interest rates": "rates", "trade and exports": "trade", "prices": "inflation", "employment": "jobs", "transportation": "transport"}
+_TOPIC_ALIASES = {"rate": "rates", "interest rate": "rates", "interest rates": "rates", "trade and exports": "trade", "prices": "inflation", "employment": "jobs", "transportation": "transport"}
 FEEDBACK_WEIGHT = 0.1
 
 # ISO alpha-2 members of UN M49 region 150 (Europe).
@@ -231,9 +231,13 @@ def _trust_eligible(story: dict[str, Any]) -> tuple[bool, str]:
             linked = False
         if not str(article.get("source") or "").strip() or not linked:
             return False, "missing publisher or source link"
-        if not _quantity_supported(fact, fact.get("language") or article.get("language", "en")):
-            return False, "quantity missing from cited evidence"
         sources.add(str(article["article_id"]))
+    # Unverifiable figures are dropped at narration; a story needs at least one verified figure to be spoken.
+    if not any(
+        _quantity_supported(fact, fact.get("language") or articles[str(fact["article_id"])].get("language", "en"))
+        for fact in facts
+    ):
+        return False, "quantity missing from cited evidence"
     official = any(bool(articles[article_id].get("official")) for article_id in sources)
     return True, "official source included" if official else "publisher sources cited"
 
@@ -656,7 +660,10 @@ def _story_features(
     region: str,
 ) -> tuple[list[_StoryFeatures], set[str]]:
     # Unsourced or unlinked stories must not move the recency reference or duplicate counts.
+    # Provenance is judged on all original facts. Memory then drops what was already said.
     sourced = [story for story in stories if _trust_eligible(story)[0]]
+    if spoken:
+        sourced = [story for story in (_unspoken_story(story, spoken) for story in sourced) if _trust_eligible(story)[0]]
     reference_day = max((str(story.get("publication_date", ""))[:10] for story in sourced), default="")
     novelty = _novelty_values(sourced)
     vocabulary = {
@@ -666,26 +673,20 @@ def _story_features(
     vocabulary = {axis: patterns for axis, patterns in vocabulary.items() if patterns}
     axes = weight_axes | exclusion_axes
     rows = []
-    for story in stories:
+    for story in sourced:
         if not _matches_region(story, region):
             continue
-        eligible, trust_reason = _trust_eligible(story)
-        if not eligible:
-            continue
-        if spoken:
-            story = _unspoken_story(story, spoken)
-            eligible, trust_reason = _trust_eligible(story)
-            if not eligible:
-                continue
+        _, trust_reason = _trust_eligible(story)
         topics = _story_topics(story)
         content = " ".join(
             [str(story.get("title", ""))]
             + [str(fact.get("statement", "")) for fact in story.get("facts", [])]
         ).lower()
         evidence = " ".join([str(story.get("title", "")), *(str(fact.get("evidence", "")) for fact in story.get("facts", []))])
-        mentions = frozenset(axis for axis in axes if _mentions_topic(axis, evidence))
+        labeled = frozenset(axis for axis in exclusion_axes if _has_topic(axis, topics))
+        mentions = frozenset(axis for axis in axes if _mentions_topic(axis, evidence)) | labeled
         relevance = {
-            axis: 1.0 if axis in mentions else sum(bool(pattern.search(content)) for pattern in patterns) / len(patterns)
+            axis: sum(bool(pattern.search(content)) for pattern in patterns) / len(patterns)
             for axis, patterns in vocabulary.items()
         }
         rows.append(_StoryFeatures(
