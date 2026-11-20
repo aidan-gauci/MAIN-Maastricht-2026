@@ -148,7 +148,12 @@ function Language({ code }: { code?: string }) {
 }
 
 function StatusChip({ claim }: { claim: Claim }) {
-  if (claim.status === 'corroborated') return <span className="trace-chip ok"><CircleCheck size={13} aria-hidden="true"/>{claim.sources.length} sources agree</span>;
+  if (claim.status === 'corroborated') {
+    // One publisher's translated editions are not independent confirmation; say so.
+    const publishers = new Set(claim.sources.map(source => source.source)).size;
+    const label = publishers > 1 ? `${claim.sources.length} articles agree` : `${claim.sources.length} editions agree`;
+    return <span className="trace-chip ok"><CircleCheck size={13} aria-hidden="true"/>{label}</span>;
+  }
   if (claim.status === 'conflict') return <span className="trace-chip warn"><TriangleAlert size={13} aria-hidden="true"/>Conflict flagged</span>;
   if (claim.status === 'untraced') return <span className="trace-chip warn"><TriangleAlert size={13} aria-hidden="true"/>Source not found</span>;
   return <span className="trace-chip"><Link2 size={13} aria-hidden="true"/>Single source</span>;
@@ -246,7 +251,7 @@ export function TracesView({ briefing, evidence, available, availableAt, loading
           <li><strong>{model.claimCount}</strong><span>spoken figures</span></li>
           <li><strong>{model.factCount}</strong><span>facts used</span></li>
           <li><strong>{model.sourceCount}</strong><span>source articles in {plural(model.languageCount, 'language')}</span></li>
-          <li className="ok"><strong>{model.corroboratedCount}</strong><span>corroborated by 2+ sources</span></li>
+          <li className="ok"><strong>{model.corroboratedCount}</strong><span>matched in 2+ articles</span></li>
           <li className={model.conflictCount ? 'warn' : ''}><strong>{model.conflictCount}</strong><span>{model.conflictCount === 1 ? 'conflict' : 'conflicts'} flagged</span></li>
         </ul>
         <div className="trace-toolbar">

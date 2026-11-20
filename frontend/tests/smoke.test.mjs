@@ -140,7 +140,7 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   assert.ok(traceLinks.includes(firstSegment.sources[0].url), 'trace links to the cited article');
   assert.equal(await tracePanel.locator('.trace-source a').first().getAttribute('target'), '_blank');
   if (new Set(firstSegment.sources.map(item => item.article_id)).size > 1) {
-    await tracePanel.getByText(/^\d+ sources agree$/).first().waitFor();
+    await tracePanel.getByText(/^\d+ (articles|editions) agree$/).first().waitFor();
   }
   await page.getByRole('button', { name: 'Expand all segments' }).click();
   if (briefing.segments.some(item => item.conflict)) {
