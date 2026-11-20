@@ -8,8 +8,25 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
+
+INTRO_PAUSE = '<break time="0.7s" />'
+FIGURE_PAUSE = '<break time="0.35s" />'
+
+
+def with_pauses(text: str) -> str:
+    """Add ElevenLabs break tags between sentences: a longer one after the opening line.
+
+    Narration reads as a list of figures ("Policy rate, 3.25 percent. Inflation, 2.6 percent."),
+    which sounds rushed without short pauses. Only sentence ends followed by a capital are used,
+    so decimals such as 3.25 are never split. The transcript keeps the plain text.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-ZÄÖÜ\"'“])", text.strip())
+    if len(sentences) < 2:
+        return text
+    return f" {INTRO_PAUSE} ".join([sentences[0], f" {FIGURE_PAUSE} ".join(sentences[1:])])
 
 
 class Providers:
@@ -162,6 +179,7 @@ class Providers:
             raise RuntimeError("Install the elevenlabs package to use live speech") from exc
         from .audio import speech_timeout
         client = ElevenLabs(api_key=api_key, timeout=speech_timeout())
+        text = with_pauses(text)
         audio = client.text_to_speech.convert(text=text, voice_id=voice_id, model_id=os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), output_format="mp3_44100_128")
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)

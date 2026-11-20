@@ -8,6 +8,9 @@ from contextlib import contextmanager
 from uuid import uuid4
 
 
+STORY_GAP_SECONDS = 0.9
+
+
 def offline_voice(text, path):
     if binary := (shutil.which("espeak-ng") or shutil.which("espeak")):
         command = [binary, "-v", "en", "-w", path.name, "--stdin"]
@@ -97,16 +100,30 @@ def _assemble_audio(clips, output, ffmpeg):
                         combined.writeframesraw(frames)
         return
 
+    # A short silence between stories makes the briefing easier to follow. Re-encoding (instead of
+    # stream copy) keeps the join valid whatever the clips' channel layout.
+    gap = output.with_name(f"{output.stem}.gap.mp3")
     manifest = output.with_suffix(".txt")
     try:
-        manifest.write_text("".join(f"file {clip.name}\n" for clip in clips), encoding="ascii")
+        subprocess.run(
+            [ffmpeg, "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+             "-t", str(STORY_GAP_SECONDS), "-b:a", "128k", str(gap)],
+            capture_output=True, check=True, timeout=30,
+        )
+        entries = []
+        for index, clip in enumerate(clips):
+            if index:
+                entries.append(f"file {gap.name}\n")
+            entries.append(f"file {clip.name}\n")
+        manifest.write_text("".join(entries), encoding="ascii")
         subprocess.run(
             [ffmpeg, "-nostdin", "-loglevel", "error", "-f", "concat", "-i", str(manifest),
-             "-c:a", "copy", str(output)],
+             "-ac", "1", "-ar", "44100", "-b:a", "128k", str(output)],
             capture_output=True, check=True, timeout=90,
         )
     finally:
         manifest.unlink(missing_ok=True)
+        gap.unlink(missing_ok=True)
 
 
 def create_audio(briefing, store, providers, mode):
@@ -114,7 +131,7 @@ def create_audio(briefing, store, providers, mode):
     extension = "mp3" if mode == "live" else "wav"
     language = briefing["language"]
     voice = (
-        os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+        os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1"
     ) if mode == "live" else ("offline",)
     segments = briefing["segments"]
     if not segments:
