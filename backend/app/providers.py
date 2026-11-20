@@ -16,6 +16,28 @@ INTRO_PAUSE = '<break time="0.7s" />'
 FIGURE_PAUSE = '<break time="0.35s" />'
 
 
+VOICE_SETTING_ENV = {
+    "speed": "ELEVENLABS_SPEED",            # 0.7-1.2; 1.0 is the voice's normal pace
+    "stability": "ELEVENLABS_STABILITY",    # lower = more expressive, higher = steadier
+    "style": "ELEVENLABS_STYLE",            # 0-1; higher exaggerates the speaker's style
+    "similarity_boost": "ELEVENLABS_SIMILARITY",
+}
+
+
+def voice_settings() -> dict[str, float]:
+    """ElevenLabs voice settings set through the environment; unset ones keep the voice's defaults."""
+    settings = {}
+    for field, name in VOICE_SETTING_ENV.items():
+        try:
+            if os.getenv(name):
+                settings[field] = float(os.environ[name])
+        except ValueError:
+            continue
+    if "speed" in settings:
+        settings["speed"] = min(1.2, max(0.7, settings["speed"]))
+    return settings
+
+
 def with_pauses(text: str) -> str:
     """Add ElevenLabs break tags between sentences: a longer one after the opening line.
 
@@ -180,7 +202,11 @@ class Providers:
         from .audio import speech_timeout
         client = ElevenLabs(api_key=api_key, timeout=speech_timeout())
         text = with_pauses(text)
-        audio = client.text_to_speech.convert(text=text, voice_id=voice_id, model_id=os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), output_format="mp3_44100_128")
+        options = {}
+        if settings := voice_settings():
+            from elevenlabs import VoiceSettings
+            options["voice_settings"] = VoiceSettings(**settings)
+        audio = client.text_to_speech.convert(text=text, voice_id=voice_id, model_id=os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), output_format="mp3_44100_128", **options)
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as out:

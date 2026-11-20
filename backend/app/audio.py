@@ -7,6 +7,8 @@ import wave
 from contextlib import contextmanager
 from uuid import uuid4
 
+from .providers import voice_settings
+
 
 STORY_GAP_SECONDS = 0.9
 
@@ -131,7 +133,8 @@ def create_audio(briefing, store, providers, mode):
     extension = "mp3" if mode == "live" else "wav"
     language = briefing["language"]
     voice = (
-        os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1"
+        os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
+        sorted(voice_settings().items()),
     ) if mode == "live" else ("offline",)
     segments = briefing["segments"]
     if not segments:
