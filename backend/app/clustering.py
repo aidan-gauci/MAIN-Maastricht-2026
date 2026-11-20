@@ -1,6 +1,6 @@
 """Conservative local grouping based on dates, headlines and stable URLs."""
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from typing import NamedTuple
 import re
 import unicodedata
@@ -46,6 +46,35 @@ class _Headline(NamedTuple):
     numbers: set
     anchors: set
     tickers: set
+    figures: frozenset = frozenset()
+
+
+# Figures survive translation, so shared body figures are strong evidence of one story. Separators
+# are dropped so "3,25"/"3.25" and "12.400"/"12,400" match; one-digit numbers are too common to count.
+_FIGURE = re.compile(r"\d+(?:[.,]\d+)*")
+SAME_STORY_FIGURE_OVERLAP = 0.5     # headline-similar articles must also share this much of their figures
+TRANSLATION_FIGURE_OVERLAP = 0.6    # a translation shares most of its figures with the original
+TRANSLATION_WINDOW_SECONDS = 15 * 60
+TRANSLATION_MIN_FIGURES = 3
+
+
+def body_figures(article, limit=6000):
+    figures = (re.sub(r"[.,]", "", value) for value in _FIGURE.findall(str(article.get("body", ""))[:limit]))
+    return frozenset(value for value in figures if len(value) >= 2)
+
+
+def figure_overlap(first, second):
+    """Share of the smaller figure set found in the other; 0 when either has none."""
+    if not first or not second:
+        return 0.0
+    return len(first & second) / min(len(first), len(second))
+
+
+def _timestamp(article):
+    try:
+        return datetime.fromisoformat(str(article.get("publication_date", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _disagree(first, second):
@@ -78,17 +107,28 @@ def group_articles(articles, canonical_key, publication_day):
         anchors = {token for token in words - numbers - _GENERIC if len(token) >= 3}
         tickers = {ticker.casefold() for ticker in article.get("tickers", []) if ticker.strip()}
         anchors.update(f"ticker:{ticker}" for ticker in tickers)
+        figures = body_figures(article)
         route = canonical_key(article)
         headline = tuple(tokens)
         group = by_route.get(route)
+
+        def same_figures(idx):
+            # Templated headlines ("Stock Market News for Nov 18") look alike across different
+            # events; when both bodies carry several figures, require them to share most of them.
+            # Short reports that disagree on one number still group, so the conflict is labelled.
+            other = metadata[idx].figures
+            if len(figures) < TRANSLATION_MIN_FIGURES or len(other) < TRANSLATION_MIN_FIGURES:
+                return True
+            return figure_overlap(figures, other) >= SAME_STORY_FIGURE_OVERLAP
+
         if group is None and anchors and len(words) >= 3:
             group = next((idx for idx in by_headline[headline] if abs(day - metadata[idx].day) <= 3 and anchors & metadata[idx].anchors
-                          and not _disagree(tickers, metadata[idx].tickers)), None)
+                          and not _disagree(tickers, metadata[idx].tickers) and same_figures(idx)), None)
         if group is None and len(words) >= 4:
             candidates = set().union(*(by_anchor.get(token, set()) for token in anchors))
             matches = []
             for idx in candidates:
-                other_day, other_words, other_numbers, other_anchors, other_tickers = metadata[idx]
+                other_day, other_words, other_numbers, other_anchors, other_tickers, _ = metadata[idx]
                 shared_words = words & other_words
                 union = words | other_words
                 if abs(day - other_day) > 2 or len(shared_words) < 4 or not (anchors & other_anchors):
@@ -99,6 +139,8 @@ def group_articles(articles, canonical_key, publication_day):
                 # the headlines identify different measures or periods.
                 if any(_disagree(words & axis, other_words & axis) for axis in _EVENT_AXES):
                     continue
+                if not same_figures(idx):
+                    continue
                 similarity = len(shared_words) / len(union)
                 if similarity >= 0.68 or (similarity >= 0.53 and numbers & other_numbers):
                     matches.append((similarity, -idx))
@@ -107,11 +149,50 @@ def group_articles(articles, canonical_key, publication_day):
         if group is None:
             group = len(groups)
             groups.append([])
-            metadata.append(_Headline(day, words, numbers, anchors, tickers))
+            metadata.append(_Headline(day, words, numbers, anchors, tickers, figures))
             by_headline[headline].append(group)
             for token in anchors:
                 by_anchor[token].add(group)
         by_route[route] = group
         groups[group].append(article)
 
-    return groups
+    return _join_translations(groups)
+
+
+def _language(article):
+    return str(article.get("language") or "en").lower()[:2]
+
+
+def _join_translations(groups):
+    """Attach groups that translate another-language group published within minutes.
+
+    Publishers release translated editions with different headlines and URLs, so headline matching
+    misses them. A translation appears within minutes of its original and repeats its figures.
+    """
+    profiles = []
+    for group in groups:
+        figures = frozenset().union(*(body_figures(article) for article in group))
+        stamps = [stamp for stamp in map(_timestamp, group) if stamp]
+        profiles.append((frozenset(map(_language, group)), figures, stamps))
+    target = list(range(len(groups)))
+    # Join into groups that contain English (the corpus's main language), else into the earliest.
+    hubs = [idx for idx, (languages, _, _) in enumerate(profiles) if "en" in languages]
+    for idx, (languages, figures, stamps) in enumerate(profiles):
+        if "en" in languages or len(figures) < TRANSLATION_MIN_FIGURES or not stamps:
+            continue
+        best, best_overlap = None, TRANSLATION_FIGURE_OVERLAP
+        for hub in hubs:
+            hub_languages, hub_figures, hub_stamps = profiles[hub]
+            if languages & hub_languages or len(hub_figures) < TRANSLATION_MIN_FIGURES:
+                continue
+            if not any(abs((a - b).total_seconds()) <= TRANSLATION_WINDOW_SECONDS for a in stamps for b in hub_stamps):
+                continue
+            overlap = figure_overlap(figures, hub_figures)
+            if overlap >= best_overlap and (best is None or overlap > best_overlap):
+                best, best_overlap = hub, overlap
+        if best is not None:
+            target[idx] = best
+    joined = {}
+    for idx, group in enumerate(groups):
+        joined.setdefault(target[idx], []).extend(group)
+    return [joined[idx] for idx in sorted(joined)]
