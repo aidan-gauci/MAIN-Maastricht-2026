@@ -95,6 +95,8 @@ main{padding:23px 28px 0}
 .evidence-summary strong{font-size:14px;color:#385843}
 .evidence-title{padding:13px 14px}
 .evidence-title strong{font-size:16px;color:#35473b}
+h3.evidence-title{margin:0;cursor:default}
+.evidence-actions{display:flex;flex-wrap:wrap;gap:0 16px;margin-bottom:8px}
 .evidence-count{font-size:10px;color:#596d5d}
 .evidence-detail{padding:12px 14px 15px}
 .evidence-sources a span:last-child{font-size:11px;color:#365f45}

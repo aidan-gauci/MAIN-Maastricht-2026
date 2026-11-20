@@ -6,13 +6,19 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 from typing import Any, Iterable
+from uuid import uuid4
+
+from .audio import audio_file
 
 
 class Store:
     def __init__(self, path: str | Path, audio_dir: str | Path):
         self.path = Path(path)
         self.audio_dir = Path(audio_dir)
+        self._snapshot_lock = Lock()
+        self._snapshot = None
 
     @contextmanager
     def _connect(self):
@@ -42,6 +48,15 @@ class Store:
                     story_id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS story_summaries (
+                    story_id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS corpus_revision (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    revision TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO corpus_revision VALUES (1, 'legacy');
                 CREATE TABLE IF NOT EXISTS briefings (
                     briefing_id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
@@ -78,8 +93,29 @@ class Store:
             rows = db.execute("SELECT payload FROM stories ORDER BY story_id").fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
-    def replace_corpus(self, articles: Iterable[dict[str, Any]], stories: Iterable[dict[str, Any]]) -> None:
-        """Replace the corpus as one transaction; article bodies are intentionally discarded."""
+    def recommendation_snapshot(self, build):
+        """Cache a consistent read of the corpus and its summaries per server process."""
+        with self._snapshot_lock, self._connect() as db:
+            db.execute("BEGIN")
+            revision, = db.execute("SELECT revision FROM corpus_revision WHERE id = 1").fetchone()
+            if self._snapshot is None or self._snapshot[0] != revision:
+                stories = [json.loads(row["payload"]) for row in db.execute(
+                    "SELECT payload FROM stories ORDER BY story_id"
+                )]
+                summaries = {row["story_id"]: json.loads(row["payload"]) for row in db.execute(
+                    "SELECT story_id, payload FROM story_summaries"
+                )}
+                self._snapshot = (revision, build(stories, summaries))
+            return self._snapshot[1]
+
+    def replace_corpus(self, articles: Iterable[dict[str, Any]], stories: Iterable[dict[str, Any]],
+                       summaries: dict[str, Any] | None = None, *,
+                       preparation_usage: Iterable[dict[str, Any]] | None = None) -> None:
+        """Publish articles, stories, summaries, and import usage in one transaction.
+
+        Article bodies are discarded. Passing preparation_usage replaces the previous import's
+        ingestion and extraction totals while leaving briefing-time usage intact.
+        """
         article_rows = []
         for n, item in enumerate(articles):
             article_rows.append((
@@ -96,8 +132,18 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM articles")
             db.execute("DELETE FROM stories")
+            db.execute("DELETE FROM story_summaries")
+            db.execute("UPDATE corpus_revision SET revision=? WHERE id=1", (uuid4().hex,))
             db.executemany("INSERT INTO articles(article_id,title,source,publication_date,language,url,official) VALUES(?,?,?,?,?,?,?)", article_rows)
             db.executemany("INSERT INTO stories(story_id,payload) VALUES(?,?)", story_rows)
+            db.executemany("INSERT INTO story_summaries(story_id,payload) VALUES(?,?)", [
+                (story_id, json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
+                for story_id, summary in (summaries or {}).items()
+            ])
+            if preparation_usage is not None:
+                db.execute("DELETE FROM usage WHERE stage IN ('ingestion','story_extraction')")
+                for row in preparation_usage:
+                    self._insert_usage(db, **row)
 
     def save_briefing(self, briefing: dict[str, Any]) -> None:
         briefing_id = self._identifier(briefing, ("briefing_id", "id"), "latest")
@@ -105,36 +151,90 @@ class Store:
         with self._connect() as db:
             db.execute("INSERT INTO briefings(briefing_id,payload,updated_at) VALUES(?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT(briefing_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at", (briefing_id, payload))
 
+    def save_briefing_audio(self, briefing: dict[str, Any]) -> dict[str, Any]:
+        """Keep successful audio when concurrent retries overlap."""
+        briefing_id = briefing["id"]
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT payload FROM briefings WHERE briefing_id=?", (briefing_id,)).fetchone()
+            if row:
+                current = json.loads(row["payload"])
+                if current.get("audio_status") == "ready" and audio_file(self, current.get("audio_url")):
+                    return current
+            payload = json.dumps(briefing, ensure_ascii=False, separators=(",", ":"))
+            db.execute(
+                """INSERT INTO briefings(briefing_id,payload) VALUES(?,?)
+                   ON CONFLICT(briefing_id) DO UPDATE SET payload=excluded.payload,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+                (briefing_id, payload),
+            )
+        return briefing
+
     def briefing(self, id: str) -> dict[str, Any] | None:
         with self._connect() as db:
             row = db.execute("SELECT payload FROM briefings WHERE briefing_id=?", (str(id),)).fetchone()
         return json.loads(row["payload"]) if row else None
 
-    def briefing_count(self) -> int:
-        with self._connect() as db:
-            return db.execute("SELECT COUNT(*) FROM briefings").fetchone()[0]
+    @staticmethod
+    def _insert_usage(db, stage, *, mode, input_tokens=0, output_tokens=0, characters=0, estimated_usd=None):
+        db.execute(
+            "INSERT INTO usage(stage,mode,input_tokens,output_tokens,characters,estimated_usd) VALUES(?,?,?,?,?,?)",
+            (stage, mode, input_tokens, output_tokens, characters, estimated_usd),
+        )
 
-    def record_usage(self, stage: str, *, mode: str, input_tokens: int = 0, output_tokens: int = 0, characters: int = 0, estimated_usd: float | None = None) -> None:
+    def record_usage(self, stage: str, **metrics) -> None:
         with self._connect() as db:
-            db.execute("INSERT INTO usage(stage,mode,input_tokens,output_tokens,characters,estimated_usd) VALUES(?,?,?,?,?,?)", (stage, mode, input_tokens, output_tokens, characters, estimated_usd))
+            self._insert_usage(db, stage, **metrics)
+
+    @staticmethod
+    def _usage(db, mode):
+        rows = db.execute("""SELECT stage,COUNT(*) calls,COALESCE(SUM(input_tokens),0) input_tokens,
+            COALESCE(SUM(output_tokens),0) output_tokens,COALESCE(SUM(characters),0) characters,
+            CASE WHEN COUNT(estimated_usd)=COUNT(*) THEN SUM(estimated_usd) END estimated_usd
+            FROM usage WHERE mode=? GROUP BY stage ORDER BY stage""", (mode,)).fetchall()
+        return [dict(row) for row in rows]
 
     def usage(self, mode: str) -> list[dict[str, Any]]:
         with self._connect() as db:
-            rows = db.execute("""SELECT stage,COUNT(*) calls,COALESCE(SUM(input_tokens),0) input_tokens,
-                COALESCE(SUM(output_tokens),0) output_tokens,COALESCE(SUM(characters),0) characters,
-                CASE WHEN COUNT(estimated_usd)=COUNT(*) THEN SUM(estimated_usd) END estimated_usd
-                FROM usage WHERE mode=? GROUP BY stage ORDER BY stage""", (mode,)).fetchall()
-        return [dict(row) for row in rows]
+            return self._usage(db, mode)
+
+    def cost_snapshot(self, mode):
+        """Read usage and corpus counts from the same revision."""
+        with self._connect() as db:
+            db.execute("BEGIN")
+            usage = self._usage(db, mode)
+            article_count, = db.execute("SELECT COUNT(*) FROM articles").fetchone()
+            story_count, = db.execute("SELECT COUNT(*) FROM stories").fetchone()
+            briefing_count, narrated_count = db.execute("""
+                SELECT COUNT(*),
+                       COUNT(CASE WHEN json_extract(payload,'$.audio_status') = 'ready'
+                                   AND json_extract(payload,'$.audio_url') IS NOT NULL THEN 1 END)
+                FROM briefings
+            """).fetchone()
+        return usage, article_count, story_count, briefing_count, narrated_count
 
     def purge(self) -> None:
-        """Remove the database and known generated audio files, without traversing arbitrary trees."""
-        for candidate in (self.path, Path(str(self.path) + "-wal"), Path(str(self.path) + "-shm")):
+        """Remove the database and known generated audio files, without traversing arbitrary trees.
+
+        Safe to repeat. Raises ``RuntimeError`` when a running backend still holds the files.
+        """
+        self._snapshot = None
+        try:
+            # Audio is app-owned; delete regular files only and leave unexpected subdirectories intact.
+            if self.audio_dir.is_dir():
+                for candidate in self.audio_dir.iterdir():
+                    generated_audio = candidate.suffix.lower() in {".mp3", ".wav", ".ogg", ".m4a", ".tmp"}
+                    lock_file = candidate.name.startswith(".audio-") and candidate.suffix == ".lock"
+                    manifest = candidate.name.endswith(".tmp.txt")
+                    if candidate.is_file() and (generated_audio or lock_file or manifest):
+                        candidate.unlink()
+            for candidate in (self.path, Path(str(self.path) + "-wal"), Path(str(self.path) + "-shm"), Path(str(self.path) + "-journal")):
+                candidate.unlink(missing_ok=True)
+        except PermissionError:
+            raise RuntimeError(f"Could not delete files in {self.path.parent}. Stop the backend and run the command again") from None
+        # Remove the folders the app created once they are empty; anything else is left in place.
+        for directory in (self.audio_dir, self.path.parent):
             try:
-                candidate.unlink()
-            except FileNotFoundError:
+                directory.rmdir()
+            except OSError:
                 pass
-        # Audio is app-owned; delete regular files only and leave unexpected subdirectories intact.
-        if self.audio_dir.exists() and self.audio_dir.is_dir():
-            for candidate in self.audio_dir.iterdir():
-                if candidate.is_file() and candidate.suffix.lower() in {".mp3", ".wav", ".ogg", ".m4a", ".tmp"}:
-                    candidate.unlink()

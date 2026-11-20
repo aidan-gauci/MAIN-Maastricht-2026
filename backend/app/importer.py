@@ -1,23 +1,40 @@
 import json
 import re
 from io import TextIOWrapper
-from pathlib import Path
-from zipfile import ZipFile
+from pathlib import Path, PurePosixPath
+from zipfile import BadZipFile, ZipFile
 
 from pydantic import ValidationError
 
 from .config import Article
 
 
+def is_feed(name):
+    """JSONL feeds at any depth, skipping macOS archive metadata such as __MACOSX/ and ._ files."""
+    parts = PurePosixPath(str(name).replace("\\", "/")).parts
+    return (
+        bool(parts) and parts[-1].lower().endswith(".jsonl")
+        and "__MACOSX" not in parts and not parts[-1].startswith("._")
+    )
+
+
 def feeds(path):
+    path = Path(path)
+    if not path.exists():
+        raise ValueError(f"Import path not found: {path}")
     if path.is_dir():
-        for file in sorted(path.glob("*.jsonl")):
-            with file.open(encoding="utf-8-sig") as stream:
-                yield file.name, stream
+        for file in sorted(path.rglob("*"), key=lambda item: item.relative_to(path).as_posix()):
+            if file.is_file() and is_feed(file.relative_to(path).as_posix()):
+                with file.open(encoding="utf-8-sig") as stream:
+                    yield file.name, stream
     elif path.suffix.lower() == ".zip":
-        with ZipFile(path) as archive:
+        try:
+            archive = ZipFile(path)
+        except BadZipFile:
+            raise ValueError(f"Not a readable ZIP archive: {path.name}") from None
+        with archive:
             for name in sorted(archive.namelist()):
-                if name.endswith(".jsonl"):
+                if not name.endswith("/") and is_feed(name):
                     with TextIOWrapper(archive.open(name), encoding="utf-8-sig") as stream:
                         yield name, stream
     else:
@@ -47,9 +64,14 @@ def read_articles(path: Path, *, official=False, limit=None):
                 for key in ("title", "body", "source"):
                     if isinstance(row.get(key), str):
                         row[key] = re.sub(r"\s+", " ", row[key]).strip()
+                if isinstance(row.get("language"), str):
+                    row["language"] = row["language"].strip().lower()
                 row["official"] = official or row.get("official", False)
                 items.append(Article.model_validate(row).model_dump(mode="json"))
-            except (ValidationError, ValueError, AttributeError, TypeError):
+            except ValidationError as exc:
+                fields = sorted({".".join(map(str, error["loc"])) or "row" for error in exc.errors()})
+                raise ValueError(f"Invalid article at {Path(name).name}:{line_number} (check {', '.join(fields)})") from None
+            except (ValueError, AttributeError, TypeError):
                 raise ValueError(f"Invalid article at {Path(name).name}:{line_number}") from None
             if limit is not None and len(items) >= limit:
                 return items
