@@ -3,9 +3,10 @@ from uuid import uuid4
 
 from .audio import create_audio
 from .config import CORPUS, DATA, MODE, STYLES
-from .pipeline import narrate, prepare, rank
+from .pipeline import prepare, prepare_ranking, rank
 from .providers import Providers
 from .storage import Store
+from .summaries import prepare_summaries, select_summaries
 
 STAGES = ("ingestion", "story_extraction", "script_generation", "speech_generation")
 
@@ -25,7 +26,7 @@ def prepare_corpus(store, articles):
     stories = prepare(articles, get_providers(store))
     if not stories:
         raise ValueError("Preparation produced no stories")
-    store.replace_corpus(articles, stories)
+    store.replace_corpus(articles, stories, prepare_summaries(stories))
     return stories
 
 
@@ -46,12 +47,21 @@ def wildcard_profile(wildcard):
     )
 
 
+def _build_recommendations(stories, summaries):
+    return prepare_ranking(stories), summaries or prepare_summaries(stories), list_topics(stories)
+
+
+def recommendation_topics(store):
+    return store.recommendation_snapshot(_build_recommendations)[2]
+
+
 def generate_briefing(store, profile):
-    providers = get_providers(store)
-    selected = rank(store.stories(), profile)
+    ranking, summaries, _ = store.recommendation_snapshot(_build_recommendations)
+    limit = max(1, int(profile.get("duration", 5) or 5))
+    selected = rank([], profile, prepared=ranking, limit=limit)
     if not selected:
         raise ValueError("No sourced stories match this profile")
-    segments = narrate(selected, profile, providers)
+    segments = select_summaries(selected, profile, summaries)
     if not segments:
         raise ValueError("No narration passed the evidence checks")
     used = {fact for segment in segments for fact in segment["fact_ids"]}
@@ -68,7 +78,7 @@ def generate_briefing(store, profile):
         audio_status="pending",
     )
     store.save_briefing(briefing)
-    return render_audio(store, briefing, providers)
+    return render_audio(store, briefing)
 
 
 def render_audio(store, briefing, providers=None):
@@ -80,8 +90,7 @@ def render_audio(store, briefing, providers=None):
     except Exception as exc:
         logging.getLogger(__name__).warning("Audio generation failed (%s)", type(exc).__name__)
         briefing["audio_status"] = "unavailable"
-    store.save_briefing(briefing)
-    return briefing
+    return store.save_briefing_audio(briefing)
 
 
 def usage_report(store):

@@ -1,7 +1,6 @@
 import logging
 import re
 from contextlib import asynccontextmanager
-from threading import Lock
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -9,10 +8,11 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import CORPUS, DEMO, MODE, ROOT, BriefingRequest, load_profiles, supported_languages
 from .importer import read_articles
-from .service import generate_briefing, get_store, list_topics, prepare_corpus, render_audio, usage_report, wildcard_profile
+from .service import (
+    generate_briefing, get_store, prepare_corpus, recommendation_topics, render_audio, usage_report, wildcard_profile,
+)
 
 store = get_store()
-generation_lock = Lock()
 
 
 @asynccontextmanager
@@ -20,6 +20,7 @@ async def lifespan(app):
     store.initialize()
     if CORPUS == "fixture" and MODE == "demo" and not store.stories():
         prepare_corpus(store, read_articles(DEMO / "articles.jsonl"))
+    recommendation_topics(store)
     yield
 
 
@@ -33,7 +34,7 @@ def profiles():
 
 @app.get("/api/topics")
 def topics():
-    return list_topics(store.stories())
+    return recommendation_topics(store)
 
 
 @app.get("/api/languages")
@@ -65,8 +66,7 @@ def create_briefing(request: BriefingRequest):
     if profile["language"] not in supported_languages():
         raise HTTPException(422, "This output language has not been enabled")
     try:
-        with generation_lock:
-            return generate_briefing(store, profile)
+        return generate_briefing(store, profile)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
@@ -84,8 +84,7 @@ def briefing(briefing_id: str):
 
 @app.post("/api/briefings/{briefing_id}/audio")
 def retry_audio(briefing_id: str):
-    with generation_lock:
-        return render_audio(store, briefing(briefing_id))
+    return render_audio(store, briefing(briefing_id))
 
 
 @app.get("/api/audio/{filename}")

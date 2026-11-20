@@ -9,7 +9,8 @@ import unicodedata
 from collections import Counter
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from heapq import nlargest
+from typing import Any, NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from .clustering import group_articles
@@ -116,25 +117,35 @@ def _positive_topic_weights(profile: dict[str, Any]) -> dict[str, float]:
             if _topic_key(topic) and float(weight) > 0}
 
 
-def _profile_scores(weights: dict[str, float], labels: set[str], text: str):
-    """Topic match uses story labels. Relevance measures interests mentioned in sourced text."""
-    total = sum(weights.values())
+class _RankingCandidate(NamedTuple):
+    story: dict[str, Any]
+    labels: set[str]
+    trust_reason: str
+    text: str
+    known_topics: dict[str, tuple[bool, bool]]
+
+
+def _topic_matches(key, candidate):
+    if key in candidate.known_topics:
+        return candidate.known_topics[key]
+    return _has_topic(key, candidate.labels), _mentions_topic(key, candidate.text)
+
+
+def _profile_scores(interests, total, candidate):
+    """Topic match uses labels. Relevance uses interest matches in sourced text."""
     if not total:
         return 0.0, 0.0, []
     matches = []
     topic_match = 0.0
     relevance = 0.0
-    for topic, weight in weights.items():
-        key = _topic_key(topic)
-        labeled = _has_topic(key, labels)
-        mentioned = _mentions_topic(key, text)
+    for topic, key, weight in interests:
+        labeled, mentioned = _topic_matches(key, candidate)
         if labeled:
             topic_match += weight
         if mentioned:
             relevance += weight
         if labeled or mentioned:
             matches.append(topic)
-    matches.sort(key=lambda topic: (-weights[topic], topic))
     return topic_match / total, relevance / total, matches
 
 
@@ -521,45 +532,65 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
     return stories or _offline_extract(articles)
 
 
-def rank(stories: list[dict[str, Any]], profile: dict[str, Any]) -> list[dict[str, Any]]:
+def prepare_ranking(stories):
+    """Index supported topic matches and provenance once per corpus snapshot."""
+    candidates = []
+    for story in stories:
+        eligible, trust_reason = _trust_eligible(story)
+        if eligible:
+            topics = {_topic_key(topic) for topic in story.get("topics", [])}
+            text = "\n".join([story.get("title", ""), *(fact["evidence"] for fact in story["facts"])])
+            known_topics = {key: (_has_topic(key, topics), _mentions_topic(key, text)) for key in _TOPIC_PATTERNS}
+            candidates.append(_RankingCandidate(story, topics, trust_reason, text, known_topics))
+    return candidates
+
+
+def rank(stories: list[dict[str, Any]], profile: dict[str, Any],
+         *, prepared=None, limit=None) -> list[dict[str, Any]]:
     """Apply the fixed topic, relevance, recency, and novelty score."""
     excluded = {_topic_key(topic) for topic in profile.get("excluded_topics", [])} - {""}
     weights = _positive_topic_weights(profile)
-    candidates = []
-    for story in stories:
-        topics = {_topic_key(topic) for topic in story.get("topics", [])}
-        if any(_has_topic(key, topics) for key in excluded):
-            continue
-        eligible, trust_reason = _trust_eligible(story)
-        if not eligible:
-            continue
-        text = "\n".join([story.get("title", ""), *(fact["evidence"] for fact in story["facts"])])
-        if any(_mentions_topic(key, text) for key in excluded):
-            continue
-        candidates.append((story, topics, trust_reason, text))
-
-    eligible_stories = [story for story, _, _, _ in candidates]
+    interests = sorted(
+        ((topic, _topic_key(topic), weight) for topic, weight in weights.items()),
+        key=lambda interest: (-interest[2], interest[0]),
+    )
+    total = sum(weights.values())
+    corpus = prepare_ranking(stories) if prepared is None else prepared
+    candidates = [
+        candidate for candidate in corpus
+        if not any(any(_topic_matches(key, candidate)) for key in excluded)
+    ]
+    eligible_stories = [candidate.story for candidate in candidates]
     ref = max((str(story.get("publication_date", ""))[:10] for story in eligible_stories), default="")
     novelty_values = _novelty_values(eligible_stories)
+
+    def scored():
+        for candidate in candidates:
+            story = candidate.story
+            topic_match, relevance, matches = _profile_scores(interests, total, candidate)
+            recency = _recency(story, ref)
+            novelty = novelty_values.get(story["id"], 0.0)
+            score = 0.4 * topic_match + 0.3 * relevance + 0.2 * recency + 0.1 * novelty
+            yield score, candidate, matches, topic_match, relevance, recency, novelty
+
+    def order(row):
+        story = row[1].story
+        return row[0], story.get("publication_date", ""), story.get("id", "")
+
+    top = sorted(scored(), key=order, reverse=True) if limit is None else nlargest(limit, scored(), key=order)
     rows = []
-    for story, topics, trust_reason, text in candidates:
-        topic_match, relevance, matches = _profile_scores(weights, topics, text)
-        recency = _recency(story, ref)
-        novelty = novelty_values.get(story["id"], 0.0)
-        conflict = any(f.get("conflict_status") == "conflict" for f in story.get("facts", []))
-        score = 0.4 * topic_match + 0.3 * relevance + 0.2 * recency + 0.1 * novelty
+    for score, candidate, matches, topic_match, relevance, recency, novelty in top:
+        story = candidate.story
         why = "Matches your interest in " + ", ".join(matches[:2]) if matches else "Sourced recent story"
-        if conflict:
+        if any(f.get("conflict_status") == "conflict" for f in story.get("facts", [])):
             why += ". Conflicting figures are labeled"
-        item = dict(story)
-        item["trust_eligible"] = True
-        item["trust_reason"] = trust_reason
-        item["score_components"] = {"topic_match": round(topic_match, 4), "relevance": round(relevance, 4), "recency": round(recency, 4), "novelty": round(novelty, 4), "score": round(score, 4)}
-        item["reason"] = why
-        item["_score"] = score
-        rows.append(item)
-    rows.sort(key=lambda x: (x["_score"], x.get("publication_date", ""), x.get("id", "")), reverse=True)
-    for row in rows: row.pop("_score", None)
+        rows.append({
+            **story, "trust_eligible": True, "trust_reason": candidate.trust_reason, "reason": why,
+            "score_components": {
+                "topic_match": round(topic_match, 4), "relevance": round(relevance, 4),
+                "recency": round(recency, 4), "novelty": round(novelty, 4), "score": round(score, 4),
+            },
+        })
     return rows
 
 
@@ -663,24 +694,30 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
         ordered_quantities = sorted(by_quantity, key=lambda quantity: -sum(
             weight for topic, weight in interests if _mentions_topic(topic, by_quantity[quantity]["evidence"])
         ))
-        ordered_facts = [by_quantity[quantity] for quantity in ordered_quantities]
-        claims = "; ".join(
-            f"{_measure_label(f, output_language, story.get('topics', []))}: {f['value']} {f.get('unit', '')}".strip()
-            for f in ordered_facts
-        )
+        claims = []
+        for quantity in ordered_quantities:
+            fact = by_quantity[quantity]
+            source_language = str(fact.get("language") or by_id[str(fact["article_id"])].get("language", "en"))
+            value = fact["value"]
+            if (source_language == "en") != (output_language == "en"):
+                value = quantity[0] if output_language == "en" else quantity[0].replace(".", ",")
+            amount = f"{value} {fact.get('unit', '')}".strip()
+            label = _measure_label(fact, output_language, story.get("topics", []))
+            claims.append((label, amount, fact["evidence"]))
+        measures = "; ".join(f"{label}: {amount}" for label, amount, _ in claims)
         expertise = str(profile.get("expertise", "intermediate"))
         frames = {
-            "en": {"beginner": f"In plain terms, the reports give these measures: {claims}.", "intermediate": f"The reports give these measures: {claims}.", "advanced": f"Reported measures: {claims}."},
-            "de": {"beginner": f"Einfach gesagt, nennen die Berichte diese Werte: {claims}.", "intermediate": f"Die Berichte nennen diese Werte: {claims}.", "advanced": f"Berichtete Kennzahlen: {claims}."},
-            "nl": {"beginner": f"Eenvoudig gezegd noemen de berichten deze cijfers: {claims}.", "intermediate": f"De berichten noemen deze cijfers: {claims}.", "advanced": f"Gerapporteerde cijfers: {claims}."},
+            "en": {"beginner": f"In plain terms, the reports give these measures: {measures}.", "intermediate": f"The reports give these measures: {measures}.", "advanced": f"Reported measures: {measures}."},
+            "de": {"beginner": f"Einfach gesagt, nennen die Berichte diese Werte: {measures}.", "intermediate": f"Die Berichte nennen diese Werte: {measures}.", "advanced": f"Berichtete Kennzahlen: {measures}."},
+            "nl": {"beginner": f"Eenvoudig gezegd noemen de berichten deze cijfers: {measures}.", "intermediate": f"De berichten noemen deze cijfers: {measures}.", "advanced": f"Gerapporteerde cijfers: {measures}."},
         }
         text = frames.get(output_language, frames["en"]).get(expertise, frames.get(output_language, frames["en"])["intermediate"])
         conflict_text = {"en": "The reports give conflicting values.", "de": "Die Berichte nennen unterschiedliche Werte.", "nl": "De berichten noemen verschillende waarden."}.get(output_language, "The reports give conflicting values.")
         # Use the local summary when a provider drops, adds, or reorders quantities.
         if getattr(providers, "live", False):
             context_rows = "\n".join(
-                f"source context={fact['evidence']}; verified amount={fact['value']} {fact.get('unit', '')}"
-                for fact in ordered_facts
+                f"source context={evidence}; verified amount={amount}"
+                for _, amount, evidence in claims
             )
             prompt = (
                 f"Write a concise paraphrase in language {output_language}. Lead with the first claim, "

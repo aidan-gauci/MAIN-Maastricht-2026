@@ -37,9 +37,17 @@ Use `--limit 20` for a sample and `--official PATH` to append public releases in
 
 Set `LIQUID_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json` to load the four official profile cards when they arrive. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
 
+## Shared recommendations and summaries
+
+The listener's topic weights form an interest vector. The app ranks eligible stories against that vector, applies topic exclusions, and uses the same weights to choose a prepared angle for each selected story. Language and expertise select a version of that angle.
+
+Each import prepares a neutral summary and up to three evidence-backed angles per eligible story. Summary text is prepared locally, with the same fact IDs, sources, and conflict labels across angles. Briefing requests select and assemble the prepared segments. Older databases can still serve briefings. Reimport the corpus to store the shared summaries so workers can load them directly after a restart.
+
+Audio clips are synthesized on first use and reused across listeners. The app assembles clips in briefing order and reuses the complete audio file when another briefing has the same ordered clips. This saves synthesis work across requests. Disk usage still grows with the number of distinct audio sequences, and reuse across workers requires the same audio directory on a filesystem that supports file locking.
+
 ## Live providers and costs
 
-Install `backend/requirements-live.txt`. Set `LIQUID_MODE=live`, `ALLOW_EXTERNAL_PROVIDER_DATA=1`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and `ELEVENLABS_VOICE_ID` in the backend environment. Import before launching the server. Only use live event processing if the organizers permit those provider transfers, and pass `--allow-provider-processing` to the event import in that case. Start with English and set `LIQUID_MULTILINGUAL=1` after validating English narration and German and Dutch outputs.
+Install `backend/requirements-live.txt` and make FFmpeg available on `PATH` to assemble multi-story MP3 briefings. Set `LIQUID_MODE=live`, `ALLOW_EXTERNAL_PROVIDER_DATA=1`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and `ELEVENLABS_VOICE_ID` in the backend environment. Import before launching the server. Only use live event processing if the organizers permit those provider transfers, and pass `--allow-provider-processing` to the event import in that case. Start with English and set `LIQUID_MULTILINGUAL=1` after validating English narration and German and Dutch outputs.
 
 The application records token usage for OpenAI and submitted text characters for ElevenLabs. Set the rates for your selected models and account to calculate USD estimates:
 
