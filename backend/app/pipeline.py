@@ -17,7 +17,7 @@ from heapq import nlargest
 from typing import Any, NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from .clustering import group_articles
+from .clustering import cosine, group_articles, merge_same_event
 from .providers import RECOVERABLE_EXTRACTION_ERRORS
 
 _LOG = logging.getLogger(__name__)
@@ -606,8 +606,9 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
         return []
     extracted: dict[str, Any] = {}
     heuristic_ids: set[str] = set()
+    vectors_by_article: dict[str, list[float]] = {}
     if getattr(providers, "live", False):
-        groups = group_articles(articles, _group_key, _day)
+        groups, vectors_by_article = _merge_same_event(group_articles(articles, _group_key, _day), providers)
         extracted_stories = []
         try:
             for batch in _provider_batches(groups):
@@ -626,7 +627,7 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
     # quantities found in that article are allowed into the prepared corpus.
     by_id = {str(a.get("article_id")): a for a in articles}
     members_by_article = {}
-    for group in group_articles(articles, _group_key, _day):
+    for group in groups:
         # Articles that fell back to the heuristic become their own stories below.
         member_ids = {str(article.get("article_id", "")) for article in group} - heuristic_ids
         for article_id in member_ids:
@@ -698,7 +699,59 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
         known = {story["id"] for story in stories}
         stories.extend(story for story in _offline_extract([a for a in articles if str(a.get("article_id")) in heuristic_ids])
                        if story["id"] not in known)
+    for story in stories:
+        # Kept with the story so briefings can avoid playing near-identical stories back to back.
+        vector = next((vectors_by_article[a["article_id"]] for a in story["articles"] if a["article_id"] in vectors_by_article), None)
+        if vector:
+            story["embedding"] = vector
     return stories
+
+
+EMBEDDING_DIMENSIONS = 256
+
+
+def _merge_same_event(groups: list[list[dict[str, Any]]], providers: Any) -> tuple[list[list[dict[str, Any]]], dict[str, list[float]]]:
+    """Embed each group's lead article once, merge cross-outlet reports of one event, keep the vectors.
+
+    Embedding is an aid, not a requirement: if it fails or returns an unexpected shape, the groups are
+    used as they are. Extraction afterwards still decides whether the provider is usable at all.
+    """
+    leads = [next((a for a in group if _language(a) == "en"), group[0]) for group in groups]
+    texts = [(str(a.get("title", "")) + "\n" + str(a.get("body", ""))[:1200]).strip() for a in leads]
+    try:
+        vectors = providers.embed(texts, stage="ingestion", dimensions=EMBEDDING_DIMENSIONS)
+        if not isinstance(vectors, list) or len(vectors) != len(groups):
+            raise ValueError("unexpected embedding response")
+        vectors = [[round(float(x), 5) for x in vector] for vector in vectors]
+    except Exception as exc:
+        _LOG.info("Story embeddings unavailable (%s); grouping without them", type(exc).__name__)
+        return groups, {}
+    by_group = {id(group): vector for group, vector in zip(groups, vectors)}
+    merged = merge_same_event(groups, vectors)
+    if len(merged) < len(groups):
+        _LOG.info("Merged %d cross-outlet reports of the same event", len(groups) - len(merged))
+    vectors_by_article = {}
+    for group in groups:
+        for article in group:
+            vectors_by_article[str(article.get("article_id", ""))] = by_group[id(group)]
+    return merged, vectors_by_article
+
+
+DIVERSITY_SIMILARITY = 0.80
+
+
+def diversify(stories: list[dict[str, Any]], threshold: float = DIVERSITY_SIMILARITY) -> list[dict[str, Any]]:
+    """Keep ranking order but pass over a story that is a near-twin of one already chosen.
+
+    Stories without embeddings (offline mode) are never passed over.
+    """
+    kept: list[dict[str, Any]] = []
+    for story in stories:
+        vector = story.get("embedding")
+        if vector and any(cosine(vector, other["embedding"]) >= threshold for other in kept if other.get("embedding")):
+            continue
+        kept.append(story)
+    return kept
 
 
 def _profile_names(profile: dict[str, Any]) -> dict[str, str]:

@@ -119,7 +119,7 @@ class Providers:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         return OpenAI()
 
-    def embed(self, texts: list[str], *, stage: str) -> list[list[float]]:
+    def embed(self, texts: list[str], *, stage: str, dimensions: int | None = None) -> list[list[float]]:
         """Callers name the stage so briefing-time calls never count as preparation."""
         if not texts:
             return []
@@ -136,7 +136,7 @@ class Providers:
             return vectors
         client = self._client()
         model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-        result = client.embeddings.create(model=model, input=texts)
+        result = client.embeddings.create(model=model, input=texts, **({"dimensions": dimensions} if dimensions else {}))
         in_tokens = getattr(result.usage, "prompt_tokens", 0) or 0
         self.record_usage(stage, mode=self.mode, input_tokens=in_tokens,
                           estimated_usd=self._usd(input_tokens=in_tokens, prefix="OPENAI_EMBEDDING"))

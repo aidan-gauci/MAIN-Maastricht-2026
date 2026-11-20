@@ -2,6 +2,7 @@
 from collections import defaultdict
 from datetime import date, datetime
 from typing import NamedTuple
+import math
 import re
 import unicodedata
 
@@ -157,6 +158,63 @@ def group_articles(articles, canonical_key, publication_day):
         groups[group].append(article)
 
     return _join_translations(groups)
+
+
+SAME_EVENT_SIMILARITY = 0.80        # embedding cosine for two outlets reporting one event
+SAME_EVENT_WINDOW_SECONDS = 24 * 3600
+SAME_EVENT_FIGURE_OVERLAP = 0.35    # same event shares figures; one ongoing topic usually does not
+
+
+def cosine(first, second):
+    if not first or not second or len(first) != len(second):
+        return 0.0
+    dot = sum(a * b for a, b in zip(first, second))
+    norm = math.sqrt(sum(a * a for a in first)) * math.sqrt(sum(b * b for b in second))
+    return dot / norm if norm else 0.0
+
+
+def _outlet(article):
+    # "Invezz - German" and "Invezz" are one outlet's editions.
+    return str(article.get("source", "")).split(" - ")[0].strip().casefold()
+
+
+def merge_same_event(groups, vectors):
+    """Join groups from different outlets that report the same event.
+
+    Embeddings alone also match articles on one ongoing topic (a multi-day saga), which must stay
+    separate stories, so a merge also needs a close publication time and shared body figures.
+    Pairs are merged greedily from most to least similar, and each group joins at most one other,
+    so chains of loosely related articles cannot snowball into one story.
+    """
+    if len(vectors) != len(groups):
+        return groups
+    leads = [next((a for a in group if _language(a) == "en"), group[0]) for group in groups]
+    stamps = [_timestamp(lead) for lead in leads]
+    figures = [frozenset().union(*(body_figures(a) for a in group)) for group in groups]
+    outlets = [{_outlet(a) for a in group} for group in groups]
+    order = sorted((i for i in range(len(groups)) if stamps[i]), key=lambda i: stamps[i])
+    pairs = []
+    for position, i in enumerate(order):
+        for j in order[position + 1:]:
+            if (stamps[j] - stamps[i]).total_seconds() > SAME_EVENT_WINDOW_SECONDS:
+                break
+            if outlets[i] & outlets[j] or len(figures[i]) < TRANSLATION_MIN_FIGURES or len(figures[j]) < TRANSLATION_MIN_FIGURES:
+                continue
+            if figure_overlap(figures[i], figures[j]) < SAME_EVENT_FIGURE_OVERLAP:
+                continue
+            similarity = cosine(vectors[i], vectors[j])
+            if similarity >= SAME_EVENT_SIMILARITY:
+                pairs.append((similarity, i, j))
+    target, used = list(range(len(groups))), set()
+    for _, i, j in sorted(pairs, reverse=True):
+        if i in used or j in used:
+            continue
+        target[j] = i
+        used.update((i, j))
+    joined = {}
+    for idx, group in enumerate(groups):
+        joined.setdefault(target[idx], []).extend(group)
+    return [joined[idx] for idx in sorted(joined)]
 
 
 def _language(article):

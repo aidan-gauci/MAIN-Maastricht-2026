@@ -205,8 +205,8 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
     limit = max(1, int(profile.get("duration", 5) or 5))
     # Narration stops at the requested story count. Stories with nothing that can be spoken faithfully
     # are passed over, so the next ranked story takes their place.
-    selected = pipeline.rank(ranking, profile, feedback_events=feedback_events,
-                             spoken_fact_ids=spoken_fact_ids, region=region)
+    selected = pipeline.diversify(pipeline.rank(ranking, profile, feedback_events=feedback_events,
+                                                spoken_fact_ids=spoken_fact_ids, region=region))
     if not selected:
         raise NoRelevantStories("No sourced stories match this profile")
     if spoken_fact_ids:
