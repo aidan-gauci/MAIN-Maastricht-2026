@@ -1,5 +1,5 @@
 {
-  "name": "Record Liquid Briefing Failures",
+  "name": "Record Briefing Scheduler Failures",
   "nodes": [
     {
       "parameters": {},
@@ -85,7 +85,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     },
@@ -123,7 +123,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/briefing-schedule",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -142,7 +142,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     }

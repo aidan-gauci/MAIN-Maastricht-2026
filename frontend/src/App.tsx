@@ -45,7 +45,7 @@ const MAX_TOPICS = 12;
 const languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
 const money = (n: number | null) => n === null ? 'Unavailable' : `$${n.toFixed(4)}`;
 const newListenerId = () => {
-  const key = 'liquid-briefing-listener-id';
+  const key = 'briefing-listener-id';
   const existing = localStorage.getItem(key);
   if (existing && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existing)) return existing;
   const id = crypto.randomUUID();
@@ -57,7 +57,7 @@ const readSetting = (key: string) => { try { return localStorage.getItem(key); }
 const writeSetting = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* ignore */ } };
 // Speed is applied by the browser to the existing file, so changing it never re-generates audio.
 const PLAYBACK_SPEEDS = [0.8, 1, 1.2, 1.5];
-const SPEED_KEY = 'liquid-briefing-playback-speed';
+const SPEED_KEY = 'briefing-playback-speed';
 const storedSpeed = () => { const value = Number(readSetting(SPEED_KEY)); return PLAYBACK_SPEEDS.includes(value) ? value : 1; };
 const applySpeed = (element: HTMLAudioElement | null, speed: number) => {
   if (!element) return;
@@ -68,7 +68,7 @@ const applySpeed = (element: HTMLAudioElement | null, speed: number) => {
 // Expressiveness is sent with a new briefing and used only when that briefing's audio is generated.
 type Expressiveness = 'calm' | 'balanced' | 'expressive';
 const EXPRESSIVENESS: { id: Expressiveness; label: string }[] = [{ id: 'calm', label: 'Steady' }, { id: 'balanced', label: 'Default' }, { id: 'expressive', label: 'Expressive' }];
-const EXPRESSIVENESS_KEY = 'liquid-briefing-expressiveness';
+const EXPRESSIVENESS_KEY = 'briefing-expressiveness';
 const storedExpressiveness = (): Expressiveness => { const value = readSetting(EXPRESSIVENESS_KEY); return EXPRESSIVENESS.some(level => level.id === value) ? value as Expressiveness : 'balanced'; };
 // Scheduled delivery needs the n8n workflows, a public HTTPS backend and durable storage; hide it unless explicitly enabled.
 const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE === '1';
@@ -109,7 +109,7 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [regions, setRegions] = useState<string[]>(['all', 'Europe']);
+  const [regions, setRegions] = useState<string[]>(['all']);
   const [voicePresets, setVoicePresets] = useState<VoicePreset[]>([{ id: 'default', label: 'Default voice' }]);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(defaultScheduleDraft);
@@ -432,7 +432,7 @@ export default function App() {
           <div className="delivery-settings">
             <div className="delivery-heading"><h3>Delivery</h3><p>Choose how your briefing should be delivered.</p></div>
             <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageNames.of(value) ?? value.toUpperCase()}</option>)}</select></label>
-            <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>
+            {regions.length > 1 && <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>}
             <label>Voice preset<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value }))}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
             <label>Voice style<select value={expressiveness} aria-describedby="voice-style-note" onChange={e => { const value = e.target.value as Expressiveness; setExpressiveness(value); writeSetting(EXPRESSIVENESS_KEY, value); }}>{EXPRESSIVENESS.map(level => <option key={level.id} value={level.id}>{level.label}</option>)}</select></label>
             <p className="microcopy" id="voice-style-note">Voice style applies to the next briefing you create. Change playback speed in the player at any time.</p>

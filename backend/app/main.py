@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import pipeline
 from .audio import audio_file
 from .config import (CORPUS, DEMO, MODE, REGIONS, ROOT, BriefingRequest, ScheduleRequest,
                      configured_voice_presets, load_profiles, supported_languages)
@@ -104,13 +105,13 @@ def _stored_briefing(briefing_id: str, listener_id: UUID | None) -> dict:
 
 
 def _dispatch_envelope(envelope: dict) -> bool:
-    url = os.getenv("LIQUID_N8N_WEBHOOK_URL", "").strip()
-    secret = os.getenv("LIQUID_SCHEDULER_SECRET", "")
+    url = os.getenv("BRIEFING_N8N_WEBHOOK_URL", "").strip()
+    secret = os.getenv("BRIEFING_SCHEDULER_SECRET", "")
     if not url or not secret or not url.lower().startswith("https://"):
         return False
     request = Request(url, data=json.dumps(envelope).encode("utf-8"),
                       headers={"Content-Type": "application/json"}, method="POST")
-    request.add_unredirected_header("X-Liquid-Scheduler-Secret", secret)
+    request.add_unredirected_header("X-Scheduler-Secret", secret)
     for attempt in range(3):
         try:
             with urlopen(request, timeout=10) as response:
@@ -134,7 +135,7 @@ def _schedule_dispatch(schedule: dict) -> None:
         previous = local_timers.pop(schedule["schedule_id"], None)
         if previous:
             previous.cancel()
-    if os.getenv("LIQUID_N8N_WEBHOOK_URL") and os.getenv("LIQUID_SCHEDULER_SECRET"):
+    if os.getenv("BRIEFING_N8N_WEBHOOK_URL") and os.getenv("BRIEFING_SCHEDULER_SECRET"):
         status = "scheduled" if _dispatch_envelope(envelope) else "dispatch_failed"
         store.update_dispatch_status(schedule["schedule_id"], schedule["schedule_version"], status)
         if status == "dispatch_failed" and MODE == "demo":
@@ -257,7 +258,7 @@ def _run_local_schedule(envelope: dict) -> None:
 
 
 def _authorized_scheduler(secret: str | None) -> None:
-    expected = os.getenv("LIQUID_SCHEDULER_SECRET", "")
+    expected = os.getenv("BRIEFING_SCHEDULER_SECRET", "")
     if not expected:
         raise HTTPException(503, "Scheduler authentication is not configured")
     if not secret or not hmac.compare_digest(secret, expected):
@@ -271,10 +272,10 @@ async def lifespan(app):
         prepare_corpus(store, read_articles(DEMO / "articles.jsonl"))
     if not store.stories():
         logging.getLogger(__name__).warning(
-            "No prepared news for LIQUID_MODE=%s LIQUID_CORPUS=%s; run `python -m backend.app import` first", MODE, CORPUS,
+            "No prepared news for BRIEFING_MODE=%s BRIEFING_CORPUS=%s; run `python -m backend.app import` first", MODE, CORPUS,
         )
     recommendation_topics(store)
-    if MODE == "demo" and not os.getenv("LIQUID_N8N_WEBHOOK_URL"):
+    if MODE == "demo" and not os.getenv("BRIEFING_N8N_WEBHOOK_URL"):
         for schedule in store.all_schedules():
             _arm_local_schedule(schedule)
     try:
@@ -306,7 +307,7 @@ def languages():
 
 @app.get("/api/regions")
 def regions():
-    return ["all", "Europe", *sorted(REGIONS - {"all", "Europe"})]
+    return [region for region in pipeline.corpus_regions(store.stories()) if region in REGIONS]
 
 
 @app.get("/api/voice-presets")
@@ -425,8 +426,8 @@ def retry_audio(briefing_id: str, listener_id: UUID | None = Query(default=None)
 
 
 @app.post("/api/scheduler/run")
-def scheduler_run(envelope: SchedulerEnvelope, x_liquid_scheduler_secret: str | None = Header(default=None, alias="X-Liquid-Scheduler-Secret")):
-    _authorized_scheduler(x_liquid_scheduler_secret)
+def scheduler_run(envelope: SchedulerEnvelope, x_scheduler_secret: str | None = Header(default=None, alias="X-Scheduler-Secret")):
+    _authorized_scheduler(x_scheduler_secret)
     try:
         return _execute_scheduled_run(envelope.model_dump())
     except HTTPException:
@@ -437,8 +438,8 @@ def scheduler_run(envelope: SchedulerEnvelope, x_liquid_scheduler_secret: str | 
 
 
 @app.post("/api/scheduler/fail")
-def scheduler_fail(envelope: SchedulerEnvelope, x_liquid_scheduler_secret: str | None = Header(default=None, alias="X-Liquid-Scheduler-Secret")):
-    _authorized_scheduler(x_liquid_scheduler_secret)
+def scheduler_fail(envelope: SchedulerEnvelope, x_scheduler_secret: str | None = Header(default=None, alias="X-Scheduler-Secret")):
+    _authorized_scheduler(x_scheduler_secret)
     values = envelope.model_dump()
     schedule = store.schedule_for_id(values["schedule_id"])
     if not schedule:

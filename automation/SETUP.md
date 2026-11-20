@@ -1,4 +1,4 @@
-# Liquid Briefing scheduler for n8n Cloud
+# Briefing scheduler for n8n Cloud
 
 The exports provide an authenticated webhook, Wait node, backend run and failure calls, and a separate error workflow. Stale waiting executions can coexist after schedule edits or delivery retries. The backend's schedule version and idempotent run checks decide which execution may generate a briefing. The workflows pass only the schedule ID, schedule version, and UTC timestamps through n8n. Article text and narration stay in the backend.
 
@@ -9,21 +9,21 @@ The workflow exports are inactive templates. They have not been imported, config
 Configure these environment variables on the backend service.
 
 ```text
-LIQUID_N8N_WEBHOOK_URL=https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule
-LIQUID_SCHEDULER_SECRET=<generate a long random secret>
+BRIEFING_N8N_WEBHOOK_URL=https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/briefing-schedule
+BRIEFING_SCHEDULER_SECRET=<generate a long random secret>
 ```
 
-Use the production webhook URL shown in the imported `Receive Schedule` node. Set the same secret in n8n's Header Auth credential. Point `LIQUID_DATA_DIR` at a persistent volume writable by the backend service. SQLite and the generated audio must both survive restarts.
+Use the production webhook URL shown in the imported `Receive Schedule` node. Set the same secret in n8n's Header Auth credential. Point `BRIEFING_DATA_DIR` at a persistent volume writable by the backend service. SQLite and the generated audio must both survive restarts.
 
 ## Import and configure
 
-1. Import `workflows/liquid-briefing-scheduler.json` and `workflows/liquid-briefing-errors.json` into the n8n project.
-2. In n8n, create a **Header Auth** credential named `Liquid Briefing Shared Secret`. Set its header name to `X-Liquid-Scheduler-Secret` and its value to the backend's `LIQUID_SCHEDULER_SECRET`.
+1. Import `workflows/briefing-scheduler.json` and `workflows/briefing-errors.json` into the n8n project.
+2. In n8n, create a **Header Auth** credential named `Briefing Scheduler Secret`. Set its header name to `X-Scheduler-Secret` and its value to the backend's `BRIEFING_SCHEDULER_SECRET`.
 3. Select that credential on `Receive Schedule`, `Run Scheduled Generation`, `Record Terminal Failure`, `Record Unhandled Failure`, and all three `Schedule Next` nodes. The export has placeholder credential IDs, so choose the created credential in the UI after import.
 4. Replace `https://YOUR-PUBLIC-BACKEND.example.com` in the run and failure HTTP nodes with the backend's public HTTPS origin.
-5. Replace `https://YOUR-N8N-INSTANCE.app.n8n.cloud` in all three `Schedule Next` nodes and the `Load Failed Execution Data` API URL with the n8n Cloud origin. Keep the production webhook path `/webhook/liquid-briefing-schedule`.
+5. Replace `https://YOUR-N8N-INSTANCE.app.n8n.cloud` in all three `Schedule Next` nodes and the `Load Failed Execution Data` API URL with the n8n Cloud origin. Keep the production webhook path `/webhook/briefing-schedule`.
 6. Create a second **Header Auth** credential named `n8n API Key`. Set its header name to `X-N8N-API-KEY` and its value to an n8n API key with the `execution:read` scope. Select it on `Load Failed Execution Data` in the error workflow. n8n's public API is unavailable during its free trial.
-7. Save the error workflow. In the scheduler workflow settings, select `Record Liquid Briefing Failures` as its error workflow, then save the scheduler.
+7. Save the error workflow. In the scheduler workflow settings, select `Record Briefing Scheduler Failures` as its error workflow, then save the scheduler.
 
 The inbound webhook returns immediately so the backend can hand off the schedule. The Wait node pauses until `generation_at`. The run endpoint's response controls whether a next occurrence exists. A `failed` run or a terminal HTTP error calls `/api/scheduler/fail`, then posts the returned current schedule to the same webhook. HTTP nodes make up to three attempts with five-second waits. After the backend records a terminal failure and the next occurrence is handed off, the scheduler marks the current execution as failed for visibility. The error workflow recovers unhandled failures that have a saved execution.
 

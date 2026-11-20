@@ -160,12 +160,12 @@ class Providers:
         model = os.getenv("OPENAI_SMALL_MODEL", "gpt-4o-mini")
         payload =[{k: a.get(k) for k in ("article_id", "title", "source", "publication_date", "language", "body", "url")} for a in articles]
         payload_text = json.dumps(payload, ensure_ascii=False)
-        max_chars = max(4000, int(os.getenv("LIQUID_LIVE_BATCH_CHARS", "48000")))
+        max_chars = max(4000, int(os.getenv("BRIEFING_LIVE_BATCH_CHARS", "48000")))
         if len(payload_text) > max_chars:
             raise ValueError("Provider extraction batch exceeds configured character limit")
         # A dense 9-article batch needed more than 4,000 output tokens and was cut off mid-JSON, which
         # aborted a full import. gpt-4o-mini allows 16,384 output tokens; billing is per token used.
-        max_output_tokens = min(16384, max(512, int(os.getenv("LIQUID_LIVE_EXTRACTION_OUTPUT_TOKENS", "16000"))))
+        max_output_tokens = min(16384, max(512, int(os.getenv("BRIEFING_LIVE_EXTRACTION_OUTPUT_TOKENS", "16000"))))
         response = client.chat.completions.create(
             model=model,
             temperature=0,

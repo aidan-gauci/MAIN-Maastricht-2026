@@ -2,7 +2,7 @@
 .env.*
 !.env.example
 .venv/
-.liquid-data/
+.briefing-data/
 tmp/
 __pycache__/
 *.pyc

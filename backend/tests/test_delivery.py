@@ -21,7 +21,7 @@ from backend.app.providers import Providers
 from backend.app.storage import RUN_LEASE, Store
 
 
-SCHEDULER_HEADERS = {"X-Liquid-Scheduler-Secret": "test-scheduler-secret"}
+SCHEDULER_HEADERS = {"X-Scheduler-Secret": "test-scheduler-secret"}
 ENVELOPE_FIELDS = ("schedule_id", "schedule_version", "generation_at", "delivery_at")
 
 
@@ -38,8 +38,8 @@ class DeliveryTest(unittest.TestCase):
         self.stories = service.prepare_corpus(self.store, read_articles(DEMO / "articles.jsonl"))
         self.enterContext(patch.object(main, "store", self.store))
         self.enterContext(patch.dict(os.environ, {
-            "LIQUID_SCHEDULER_SECRET": SCHEDULER_HEADERS["X-Liquid-Scheduler-Secret"],
-            "LIQUID_N8N_WEBHOOK_URL": "",
+            "BRIEFING_SCHEDULER_SECRET": SCHEDULER_HEADERS["X-Scheduler-Secret"],
+            "BRIEFING_N8N_WEBHOOK_URL": "",
         }))
         self.clock = self.enterContext(patch.object(service, "utc_now"))
         self.enterContext(patch.object(main, "utc_now", self.clock))
@@ -98,12 +98,12 @@ class DeliveryTest(unittest.TestCase):
         timer.return_value.start.assert_called_once()
 
     def test_dispatch_retries_transient_http_and_sends_only_the_envelope(self):
-        url = "https://example.test/webhook/liquid-briefing-schedule"
+        url = "https://example.test/webhook/briefing-schedule"
         success = Mock()
         success.__enter__ = Mock(return_value=SimpleNamespace(status=200, geturl=lambda: url))
         success.__exit__ = Mock(return_value=False)
         transient = HTTPError(url, 503, "Unavailable", None, None)
-        with (patch.dict(os.environ, {"LIQUID_N8N_WEBHOOK_URL": url}),
+        with (patch.dict(os.environ, {"BRIEFING_N8N_WEBHOOK_URL": url}),
               patch.object(main, "urlopen", side_effect=[transient, success]) as send,
               patch.object(main.time, "sleep")):
             envelope = self.save()
@@ -112,7 +112,7 @@ class DeliveryTest(unittest.TestCase):
             request = call.args[0]
             self.assertEqual(request.full_url, url)
             self.assertEqual(json.loads(request.data), envelope)
-            self.assertEqual(request.get_header("X-liquid-scheduler-secret"), SCHEDULER_HEADERS["X-Liquid-Scheduler-Secret"])
+            self.assertEqual(request.get_header("X-scheduler-secret"), SCHEDULER_HEADERS["X-Scheduler-Secret"])
 
     def test_delivery_visibility_idempotency_and_local_time_across_dst(self):
         envelope = self.save()
@@ -298,7 +298,7 @@ class DeliveryTest(unittest.TestCase):
             "ELEVENLABS_API_KEY": "test-provider-key",
             "ELEVENLABS_VOICE_ID": "test-default-voice",
             "TEST_CALM_VOICE": "test-preset-voice",
-            "LIQUID_VOICE_PRESETS": json.dumps(presets),
+            "BRIEFING_VOICE_PRESETS": json.dumps(presets),
             "ELEVENLABS_MODEL": "test-speech-model",
         }):
             output = self.store.audio_dir / "test.mp3"

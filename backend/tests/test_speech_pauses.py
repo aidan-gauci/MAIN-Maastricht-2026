@@ -23,7 +23,7 @@ class SpeechPauseTest(unittest.TestCase):
     def test_briefing_request_stores_the_level_and_rejects_unknown_ones(self):
         import tempfile, uuid
         from fastapi.testclient import TestClient
-        with patch.dict(os.environ, {"LIQUID_DATA_DIR": tempfile.mkdtemp()}), \
+        with patch.dict(os.environ, {"BRIEFING_DATA_DIR": tempfile.mkdtemp()}), \
                 patch("backend.app.audio.offline_voice", side_effect=lambda text, path: None):
             from backend.app.main import app
             with TestClient(app) as client:

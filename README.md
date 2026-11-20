@@ -2,7 +2,7 @@
 
 **Find your way through the news.** Maze turns prepared business news into short, personalized audio briefings. Every spoken figure is traced to its source. Choose a listener, generate a briefing, and open any transcript segment, or the Traces view, to follow each claim back to the reporting. The evidence and cost views support the hackathon demo.
 
-Internal names from the prototype (`LIQUID_*` environment variables, the `.liquid-data` folder, the `liquid-briefing-*` browser storage keys and the n8n workflow names) are unchanged, so existing setups and saved settings keep working.
+Configuration and storage use neutral, descriptive names rather than the product name: `BRIEFING_*` environment variables, the `.briefing-data` folder, `briefing-*` browser storage keys, the `X-Scheduler-Secret` header and `briefing-*` n8n workflows. A rename of the product does not touch deployments or saved settings.
 
 ## Run locally
 
@@ -22,9 +22,9 @@ npm ci
 npm run dev
 ```
 
-Open the URL printed by Vite. The default uses fourteen fictional articles, needs no credentials, and makes no provider calls. On first start the backend prepares the fixture automatically. Install eSpeak NG for offline audio, or use Windows with an installed system voice. On macOS or Linux, use the virtual environment's `bin/python`. If synthesis or audio assembly fails, the briefing is still saved with its transcript and `audio_status: "unavailable"`. Use the retry-audio control (`POST /api/briefings/{id}/audio`). Retrying also re-renders audio whose file was deleted. Set `LIQUID_SPEECH_TIMEOUT_SECONDS` (default 60) to limit synthesis time per clip. For a single local server, run `npm run build` in `frontend` and restart the backend to serve the built app on port 8000.
+Open the URL printed by Vite. The default uses fourteen fictional articles, needs no credentials, and makes no provider calls. On first start the backend prepares the fixture automatically. Install eSpeak NG for offline audio, or use Windows with an installed system voice. On macOS or Linux, use the virtual environment's `bin/python`. If synthesis or audio assembly fails, the briefing is still saved with its transcript and `audio_status: "unavailable"`. Use the retry-audio control (`POST /api/briefings/{id}/audio`). Retrying also re-renders audio whose file was deleted. Set `BRIEFING_SPEECH_TIMEOUT_SECONDS` (default 60) to limit synthesis time per clip. For a single local server, run `npm run build` in `frontend` and restart the backend to serve the built app on port 8000.
 
-The backend does not read `.env` files. Set variables in each PowerShell terminal with `$env:NAME = "value"`. `LIQUID_MODE`, `LIQUID_CORPUS`, and `LIQUID_DATA_DIR` must match between the server and CLI terminals, because each combination uses its own database under `.liquid-data/<corpus>/<mode>`. [.env.example](.env.example) lists every variable without values. Keep keys in the backend terminal only.
+The backend does not read `.env` files. Set variables in each PowerShell terminal with `$env:NAME = "value"`. `BRIEFING_MODE`, `BRIEFING_CORPUS`, and `BRIEFING_DATA_DIR` must match between the server and CLI terminals, because each combination uses its own database under `.briefing-data/<corpus>/<mode>`. [.env.example](.env.example) lists every variable without values. Keep keys in the backend terminal only.
 
 ## Demo runbook
 
@@ -50,26 +50,32 @@ Run these from the repository root in PowerShell. Stop the backend before reset,
 
 5. **Cleanup.** See *Demo and cleanup* below.
 
+### If a live provider fails during the demo
+
+- **Speech fails (ElevenLabs).** The briefing still opens with its transcript, sources and traces, and the player offers **Retry audio**. Any briefing played earlier replays from cached audio at no cost, so rehearse the demo briefings first.
+- **Narration or extraction fails (OpenAI).** A new listener's briefing uses prepared text and needs no OpenAI call, so start the demo with a fresh browser profile. Corpus preparation is done before the demo, never live.
+- **Both fail or the network drops.** Stop the server and restart it in a new terminal without the key file, so `BRIEFING_MODE` and `BRIEFING_CORPUS` are unset. The app runs on the fictional fixture with the offline system voice, makes no provider calls, and shows the same Listen, Evidence, Traces and Costs views.
+
 To run the browser smoke test, activate the backend virtual environment, then run `npx playwright install chromium` and `npm run test:smoke` in `frontend`. The test builds the frontend and starts a local fixture server with simulated speech. Set `PYTHON` to the virtual environment’s Python executable if needed.
 
 ## Prepare the event corpus
 
-Set `LIQUID_CORPUS=event` in the backend and import terminals. Point the CLI at the organizers' ZIP, a directory of JSONL feeds, or one JSONL file. Feeds are found at any depth, with any `.jsonl` capitalization, and macOS `__MACOSX/` and `._` entries are skipped. Stop the server while replacing or purging the corpus. The ZIP is read directly, and article bodies stay out of SQLite. The demo database and event database are separate.
+Set `BRIEFING_CORPUS=event` in the backend and import terminals. Point the CLI at the organizers' ZIP, a directory of JSONL feeds, or one JSONL file. Feeds are found at any depth, with any `.jsonl` capitalization, and macOS `__MACOSX/` and `._` entries are skipped. Stop the server while replacing or purging the corpus. The ZIP is read directly, and article bodies stay out of SQLite. The demo database and event database are separate.
 
 Import is repeatable. Each run replaces the corpus in one transaction, and preparation usage from earlier imports is replaced with it. If reading or preparing fails, the CLI exits with code 2, names the file and line or the repeated article IDs, and keeps the previous corpus. Earlier briefings stay viewable after a re-import. In live mode, a failed provider extraction also keeps the previous corpus. Pass `--allow-offline-fallback` to store the local heuristic clusters instead. A provider reply that is truncated or not valid JSON is not such a failure: that batch is retried as two halves, down to single articles, and an article that still fails is extracted with the local heuristic. The import summary reports these as `heuristic_fallback_articles`.
 
-Keep the organizer files outside the repository. `.gitignore` also ignores `*.zip`, `*.jsonl` (except `backend/demo`), `__MACOSX/`, audio files, `*.local.json`, `/data/`, `/event/`, and `.liquid-data/`, as a safety net.
+Keep the organizer files outside the repository. `.gitignore` also ignores `*.zip`, `*.jsonl` (except `backend/demo`), `__MACOSX/`, audio files, `*.local.json`, `/data/`, `/event/`, and `.briefing-data/`, as a safety net.
 
 ```powershell
-$env:LIQUID_CORPUS = "event"
-./.venv/Scripts/python.exe -m backend.app import "C:/path/liquid-briefing-data.zip"
+$env:BRIEFING_CORPUS = "event"
+./.venv/Scripts/python.exe -m backend.app import "C:/path/event-data.zip"
 ./.venv/Scripts/python.exe -m backend.app costs
 ./.venv/Scripts/python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Use `--limit 20` for a sample and `--official PATH` to append public releases in the normalized JSONL format. See `backend/demo/articles.jsonl` for that format. Event preparation without providers is a heuristic baseline. Review its clusters and evidence before using it in a live demo. The evaluation command accepts `{"stories":[{"label":"Example","article_ids":["id-1","id-2"],"values":[3.5]}]}` and reports split clusters, extra articles, and missing numeric values. Convert the organizer key to that shape and run `python -m backend.app evaluate PATH` separately from preparation.
 
-Set `LIQUID_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load the four official profile cards when they arrive. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
+Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load the four official profile cards when they arrive. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
 
 ## Shared recommendations and summaries
 
@@ -81,7 +87,7 @@ Audio clips are synthesized on first use and reused across listeners. The app as
 
 ## Live providers and costs
 
-Install `backend/requirements-live.txt` and make FFmpeg available on `PATH` to assemble multi-story MP3 briefings. Set `LIQUID_MODE=live`, `ALLOW_EXTERNAL_PROVIDER_DATA=1`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and `ELEVENLABS_VOICE_ID` in the backend environment. Import before launching the server. Only use live event processing if the organizers permit those provider transfers, and pass `--allow-provider-processing` to the event import in that case. Start with English and set `LIQUID_MULTILINGUAL=1` after validating English narration and German and Dutch outputs.
+Install `backend/requirements-live.txt` and make FFmpeg available on `PATH` to assemble multi-story MP3 briefings. Set `BRIEFING_MODE=live`, `ALLOW_EXTERNAL_PROVIDER_DATA=1`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and `ELEVENLABS_VOICE_ID` in the backend environment. Import before launching the server. Only use live event processing if the organizers permit those provider transfers, and pass `--allow-provider-processing` to the event import in that case. Start with English and set `BRIEFING_MULTILINGUAL=1` after validating English narration and German and Dutch outputs.
 
 The application records token usage for OpenAI and submitted text characters for ElevenLabs. Set the rates for your selected models and account to calculate USD estimates:
 
@@ -99,7 +105,7 @@ Costs are split into two figures:
 - `per_briefing_usd` is script spend averaged over saved briefings, plus speech spend averaged over briefings that received audio, including cache hits and successful retries. Speech-stage calls count clips synthesized by the provider. If audio has yet to succeed for any briefing, incurred speech spend is spread over saved briefings.
 
 USD figures are calculated from the recorded tokens and characters with the rates set when the report is built, so you can set or correct rates after a run. If a rate is missing for a stage that was used, the matching figure is unavailable. The 10x preparation projection assumes the same article mix, model routing, and unit rates. It does not multiply the cost of one listener's briefing.
-Set `OPENAI_BRIEFING_MODEL` to choose the narration model (defaults to `gpt-4.1`) and `ELEVENLABS_MODEL` to choose the speech model (defaults to `eleven_multilingual_v2`). Narration rates fall back to the general text rates. To offer another voice preset, set `LIQUID_VOICE_PRESETS` to a JSON object such as:
+Set `OPENAI_BRIEFING_MODEL` to choose the narration model (defaults to `gpt-4.1`) and `ELEVENLABS_MODEL` to choose the speech model (defaults to `eleven_multilingual_v2`). Narration rates fall back to the general text rates. To offer another voice preset, set `BRIEFING_VOICE_PRESETS` to a JSON object such as:
 
 ```json
 {"default":{"label":"Default voice","voice_id_env":"ELEVENLABS_VOICE_ID"},"calm":{"label":"Calm","voice_id_env":"ELEVENLABS_CALM_VOICE_ID"}}
@@ -128,10 +134,10 @@ Run the fixture checks with `./.venv/Scripts/python.exe -m unittest discover -s 
 After the event, stop the backend and purge the event data:
 
 ```powershell
-$env:LIQUID_CORPUS = "event"
+$env:BRIEFING_CORPUS = "event"
 ./.venv/Scripts/python.exe -m backend.app purge-event --confirm
 ```
 
-This removes the app databases, audio, and the folders the app created, for both event modes, under the current `LIQUID_DATA_DIR`. It is safe to repeat. If you used other data directories, set `$env:LIQUID_DATA_DIR` to each one and run it again. If the backend is still running, the command stops with "Stop the backend" instead of half-deleting. Also delete the original ZIP, the `LIQUID_PROFILES` file, and any other copies you downloaded, extracted, exported, or backed up. Keep the licensed data and derivatives out of Git and shared storage.
+This removes the app databases, audio, and the folders the app created, for both event modes, under the current `BRIEFING_DATA_DIR`. It is safe to repeat. If you used other data directories, set `$env:BRIEFING_DATA_DIR` to each one and run it again. If the backend is still running, the command stops with "Stop the backend" instead of half-deleting. Also delete the original ZIP, the `BRIEFING_PROFILES` file, and any other copies you downloaded, extracted, exported, or backed up. Keep the licensed data and derivatives out of Git and shared storage.
 
 If the backend reports a database error after you update the code, run `reset-demo --confirm` (fixture) or `purge-event --confirm` (event) and import again.

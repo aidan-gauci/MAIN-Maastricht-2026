@@ -1,10 +1,10 @@
 {
-  "name": "Schedule Liquid Briefing",
+  "name": "Schedule Briefings",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "liquid-briefing-schedule",
+        "path": "briefing-schedule",
         "authentication": "headerAuth",
         "responseMode": "onReceived",
         "options": {}
@@ -18,7 +18,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     },
@@ -96,7 +96,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     },
@@ -152,7 +152,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     },
@@ -190,7 +190,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/briefing-schedule",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -209,7 +209,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     },
@@ -247,7 +247,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/liquid-briefing-schedule",
+        "url": "https://YOUR-N8N-INSTANCE.app.n8n.cloud/webhook/briefing-schedule",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -266,7 +266,7 @@
       "credentials": {
         "httpHeaderAuth": {
           "id": "REPLACE_AFTER_IMPORT",
-          "name": "Liquid Briefing Shared Secret"
+          "name": "Briefing Scheduler Secret"
         }
       }
     },
@@ -293,7 +293,7 @@
     {
       "parameters": {
         "errorType": "errorMessage",
-        "errorMessage": "Liquid Briefing recorded a terminal generation failure."
+        "errorMessage": "The briefing scheduler recorded a terminal generation failure."
       },
       "id": "4e169ae0-35e6-4bb2-ab21-c09773e11aa1",
       "name": "Report Terminal Failure",

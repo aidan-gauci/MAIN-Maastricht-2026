@@ -65,7 +65,7 @@ def schedule_envelope(schedule: dict) -> dict[str, str | int]:
 
 
 def scheduled_run_id(envelope: dict) -> str:
-    return uuid5(NAMESPACE_URL, "liquid-briefing:" + ":".join(str(envelope[key]) for key in ("schedule_id", "schedule_version", "generation_at"))).hex
+    return uuid5(NAMESPACE_URL, "briefing-run:" + ":".join(str(envelope[key]) for key in ("schedule_id", "schedule_version", "generation_at"))).hex
 
 
 def local_delivery_date(schedule: dict, delivery_at: str) -> str:

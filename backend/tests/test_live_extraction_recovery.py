@@ -59,7 +59,7 @@ class FakeProvider:
 class BatchSplittingTest(unittest.TestCase):
     def setUp(self):
         self.articles = make_articles()
-        env = patch.dict(os.environ, {"LIQUID_LIVE_BATCH_ARTICLES": "24", "LIQUID_LIVE_BATCH_CHARS": "48000"})
+        env = patch.dict(os.environ, {"BRIEFING_LIVE_BATCH_ARTICLES": "24", "BRIEFING_LIVE_BATCH_CHARS": "48000"})
         env.start()
         self.addCleanup(env.stop)
 
@@ -163,7 +163,7 @@ class RealProviderAdapterTest(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=self.create)))
         for manager in (
             patch.object(Providers, "_client", return_value=client),
-            patch.dict(os.environ, {"LIQUID_LIVE_BATCH_ARTICLES": "24", "LIQUID_LIVE_BATCH_CHARS": "48000"}),
+            patch.dict(os.environ, {"BRIEFING_LIVE_BATCH_ARTICLES": "24", "BRIEFING_LIVE_BATCH_CHARS": "48000"}),
             patch.object(service, "get_providers", side_effect=lambda store, *, record_usage: self.attach(record_usage)),
         ):
             manager.start()

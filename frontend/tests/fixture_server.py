@@ -20,7 +20,7 @@ def mock_voice(_text, path):
 
 def main():
     assemble_audio = audio._assemble_audio
-    failure_marker = Path(os.environ["LIQUID_DATA_DIR"]) / "fail-assembly"
+    failure_marker = Path(os.environ["BRIEFING_DATA_DIR"]) / "fail-assembly"
 
     def controlled_assembly(clips, output, ffmpeg):
         if failure_marker.exists():

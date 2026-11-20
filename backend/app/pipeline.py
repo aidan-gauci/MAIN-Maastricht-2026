@@ -185,6 +185,22 @@ def _matches_region(story: dict[str, Any], region: str) -> bool:
     return region in geography or (region == "europe" and bool(geography & _EUROPE_COUNTRIES))
 
 
+def corpus_regions(stories: list[dict[str, Any]]) -> list[str]:
+    """Regions a listener can filter by: only those the prepared stories actually carry.
+
+    Offering a country no story is tagged with only produces an empty briefing, so a corpus without
+    geography metadata offers "all" alone.
+    """
+    found = {
+        str(record.get(field, "")).strip().lower()
+        for story in stories for record in (story, *story.get("articles", []))
+        for field in _GEOGRAPHY_FIELDS
+    } - {""}
+    codes = sorted(code.upper() for code in found if len(code) == 2)
+    europe = ["Europe"] if "europe" in found or any(code.lower() in _EUROPE_COUNTRIES for code in codes) else []
+    return ["all", *europe, *codes]
+
+
 def _article_reference(article: dict[str, Any]) -> dict[str, Any]:
     return {
         "article_id": str(article.get("article_id", "")),
@@ -249,9 +265,9 @@ def _trust_eligible(story: dict[str, Any]) -> tuple[bool, str]:
 
 def _provider_batches(groups: list[list[dict[str, Any]]]):
     """Bound each external extraction request by articles and characters."""
-    article_limit = max(1, int(os.getenv("LIQUID_LIVE_BATCH_ARTICLES", "24")))
-    char_limit = max(4000, int(os.getenv("LIQUID_LIVE_BATCH_CHARS", "48000")))
-    article_body_limit = max(1000, int(os.getenv("LIQUID_LIVE_ARTICLE_CHARS", "10000")))
+    article_limit = max(1, int(os.getenv("BRIEFING_LIVE_BATCH_ARTICLES", "24")))
+    char_limit = max(4000, int(os.getenv("BRIEFING_LIVE_BATCH_CHARS", "48000")))
+    article_body_limit = max(1000, int(os.getenv("BRIEFING_LIVE_ARTICLE_CHARS", "10000")))
     batch: list[dict[str, Any]] = []
     batch_chars = 0
     for group in groups:

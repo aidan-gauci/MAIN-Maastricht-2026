@@ -85,7 +85,7 @@ def run(parser, args):
     store = get_store()
     if args.command == "purge-event":
         if CORPUS != "event":
-            parser.error("Set LIQUID_CORPUS=event before purging")
+            parser.error("Set BRIEFING_CORPUS=event before purging")
         purge_corpus("event")
         print(f"Purged app-managed event data in {DATA}")
         return
@@ -95,7 +95,7 @@ def run(parser, args):
         return
     if args.command == "import":
         if (args.path.resolve() != (DEMO / "articles.jsonl").resolve() or args.official) and CORPUS != "event":
-            parser.error("Set LIQUID_CORPUS=event to import material from outside the fixture")
+            parser.error("Set BRIEFING_CORPUS=event to import material from outside the fixture")
         if args.limit is not None and args.limit < 1:
             parser.error("--limit requires a positive article count")
         if MODE == "live" and CORPUS == "event" and not (

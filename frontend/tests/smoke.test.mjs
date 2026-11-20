@@ -18,9 +18,9 @@ async function startServer(t, dataDirectory) {
     env: {
       ...process.env,
       PYTHONPATH: [repoRoot, process.env.PYTHONPATH].filter(Boolean).join(process.platform === 'win32' ? ';' : ':'),
-      LIQUID_DATA_DIR: dataDirectory,
-      LIQUID_CORPUS: 'fixture',
-      LIQUID_MODE: 'demo',
+      BRIEFING_DATA_DIR: dataDirectory,
+      BRIEFING_CORPUS: 'fixture',
+      BRIEFING_MODE: 'demo',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -59,7 +59,7 @@ function postResponse(page, path) {
 
 test('built listener generates briefings, traces evidence, shows costs, and recovers missing audio', { timeout: 45_000 }, async t => {
   await readFile(join(repoRoot, 'frontend', 'dist', 'index.html'));
-  const dataDirectory = await mkdtemp(join(tmpdir(), 'liquid-browser-'));
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'briefing-browser-'));
   const origin = await startServer(t, dataDirectory);
   const browser = await chromium.launch({ channel: 'chromium' });
   t.after(() => browser.close());

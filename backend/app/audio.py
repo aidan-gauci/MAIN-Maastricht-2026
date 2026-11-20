@@ -23,10 +23,10 @@ def offline_voice(text, path):
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
             "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.Speech; "
             "$voice = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            "$voice.SetOutputToWaveFile($env:LIQUID_VOICE_OUTPUT); "
+            "$voice.SetOutputToWaveFile($env:BRIEFING_VOICE_OUTPUT); "
             "$voice.Speak([Console]::In.ReadToEnd()); $voice.Dispose()",
         ]
-        env = {**os.environ, "LIQUID_VOICE_OUTPUT": str(path)}
+        env = {**os.environ, "BRIEFING_VOICE_OUTPUT": str(path)}
         working_dir = None
     else:
         raise RuntimeError("Install eSpeak NG for offline narration")
@@ -37,7 +37,7 @@ def offline_voice(text, path):
 def speech_timeout():
     """Seconds one narration may take before the briefing falls back to transcript-only."""
     try:
-        return max(5.0, float(os.environ.get("LIQUID_SPEECH_TIMEOUT_SECONDS", "60")))
+        return max(5.0, float(os.environ.get("BRIEFING_SPEECH_TIMEOUT_SECONDS", "60")))
     except ValueError:
         return 60.0
 

@@ -421,7 +421,7 @@ class CleanupTest(unittest.TestCase):
 
     def cli(self, *args, corpus="fixture"):
         env = {key: value for key, value in os.environ.items() if key not in PROVIDER_ENV}
-        env.update(LIQUID_DATA_DIR=str(self.data), LIQUID_CORPUS=corpus, LIQUID_MODE="demo")
+        env.update(BRIEFING_DATA_DIR=str(self.data), BRIEFING_CORPUS=corpus, BRIEFING_MODE="demo")
         return subprocess.run(
             [sys.executable, "-m", "backend.app", *args], cwd=ROOT, env=env,
             capture_output=True, text=True, timeout=120,
@@ -471,8 +471,8 @@ class CleanupTest(unittest.TestCase):
 class GitIgnoreTest(unittest.TestCase):
     def test_event_data_and_secrets_are_ignored_but_fixture_is_tracked(self):
         ignored = [
-            "event.zip", "feed.jsonl", "liquid-briefing-data/feed.jsonl", "__MACOSX/x", ".env", ".env.local",
-            "profiles.local.json", ".liquid-data/event/demo/briefings.sqlite3", "tmp/x.jsonl", "audio.mp3",
+            "event.zip", "feed.jsonl", "event-data/feed.jsonl", "__MACOSX/x", ".env", ".env.local",
+            "profiles.local.json", ".briefing-data/event/demo/briefings.sqlite3", "tmp/x.jsonl", "audio.mp3",
         ]
         tracked = ["backend/demo/articles.jsonl", "backend/demo/profiles.json", ".env.example"]
         for path in ignored + tracked:
