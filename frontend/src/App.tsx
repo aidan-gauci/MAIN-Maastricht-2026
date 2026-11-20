@@ -45,6 +45,7 @@ export default function App() {
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [costs, setCosts] = useState<Costs | null>(null);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [briefingSettings, setBriefingSettings] = useState('');
   const [mode, setMode] = useState<'profile' | 'wildcard'>('profile');
   const [profileId, setProfileId] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
@@ -61,11 +62,18 @@ export default function App() {
   const [preferencesRequest, setPreferencesRequest] = useState(0);
   const [preferencesLoading, setPreferencesLoading] = useState(true);
   const [preferencesError, setPreferencesError] = useState('');
+  const [evidenceRequest, setEvidenceRequest] = useState(0);
   const [evidenceLoading, setEvidenceLoading] = useState(true);
+  const [evidenceError, setEvidenceError] = useState('');
+  const [evidenceStoryId, setEvidenceStoryId] = useState<string | null>(null);
   const [costsLoading, setCostsLoading] = useState(true);
   const audio = useRef<HTMLAudioElement>(null);
   const briefingHeading = useRef<HTMLHeadingElement>(null);
   const focusBriefing = useRef(false);
+  const evidenceHeading = useRef<HTMLHeadingElement>(null);
+  const focusEvidence = useRef(false);
+  const inspectButton = useRef<HTMLButtonElement | null>(null);
+  const returnToStory = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -93,13 +101,17 @@ export default function App() {
   useEffect(() => {
     const controller = new AbortController();
     api<Evidence[]>('/evidence', { signal: controller.signal })
-      .then(setEvidence)
-      .catch(() => {})
+      .then(result => {
+        if (!controller.signal.aborted) setEvidence(result);
+      })
+      .catch(error => {
+        if (!controller.signal.aborted) setEvidenceError(`Could not load evidence. ${errorMessage(error)}`);
+      })
       .finally(() => {
         if (!controller.signal.aborted) setEvidenceLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [evidenceRequest]);
 
   useEffect(() => {
     if (tab !== 'costs') return;
@@ -123,26 +135,50 @@ export default function App() {
     }
   }, [briefing]);
 
+  useEffect(() => {
+    if (tab === 'evidence' && focusEvidence.current && evidenceHeading.current) {
+      evidenceHeading.current.focus();
+      focusEvidence.current = false;
+    }
+    if (tab === 'listen' && returnToStory.current) {
+      inspectButton.current?.focus();
+      returnToStory.current = false;
+    }
+  }, [tab, evidenceStoryId]);
+
   const activeProfile = profiles.find(profile => profile.id === profileId);
   const allFacts = useMemo(() => evidence.flatMap(item => item.facts), [evidence]);
   const canGenerate = mode === 'profile' ? Boolean(activeProfile) : selectedTopics.length > 0;
+  const wildcard = { topics: selectedTopics, expertise, duration, language };
+  const request = mode === 'profile' ? { profile_id: profileId } : { wildcard };
+  const settingsKey = mode === 'profile'
+    ? JSON.stringify(request)
+    : JSON.stringify({ wildcard: { ...wildcard, topics: [...wildcard.topics].sort() } });
+  const settingsChanged = briefingSettings !== '' && briefingSettings !== settingsKey;
 
   function changeView(view: typeof tab) {
     if (view !== 'listen') audio.current?.pause();
     setTab(view);
   }
 
+  function inspectEvidence(storyId: string, button: HTMLButtonElement) {
+    inspectButton.current = button;
+    focusEvidence.current = true;
+    setEvidenceStoryId(storyId);
+    changeView('evidence');
+  }
+
   async function makeBriefing() {
     audio.current?.pause();
     setAction('briefing');
     setBriefingError('');
-    const request = mode === 'profile'
-      ? { profile_id: profileId }
-      : { wildcard: { topics: selectedTopics, expertise, duration, language } };
     try {
       const result = await api<Briefing>('/briefings', { method: 'POST', body: JSON.stringify(request) });
       focusBriefing.current = true;
       setBriefing(result);
+      setBriefingSettings(settingsKey);
+      setEvidenceStoryId(null);
+      inspectButton.current = null;
       setTab('listen');
       setExpanded(null);
       setPlaying(false);
@@ -236,7 +272,9 @@ export default function App() {
           <button className="primary-button" onClick={makeBriefing} disabled={Boolean(action) || preferencesLoading || !canGenerate}>
             {action === 'briefing' ? <><LoaderCircle className="spin" size={17}/> Preparing your briefing</> : <><Sparkles size={16}/> Create my briefing <span className="button-arrow" aria-hidden="true">→</span></>}
           </button>
-          <span className="visually-hidden" role="status">{action === 'briefing' ? 'Preparing your briefing.' : ''}</span>
+          <p className={settingsChanged && action !== 'briefing' ? 'microcopy' : 'visually-hidden'} role="status">
+            {action === 'briefing' ? 'Preparing your briefing.' : settingsChanged ? 'Settings changed. Create a new briefing to apply them.' : ''}
+          </p>
           {briefingError && <p className="action-error" role="alert">{briefingError}</p>}
           <div className="privacy-note"><ShieldCheck size={15}/><span>No account required.</span></div>
         </aside>
@@ -253,10 +291,17 @@ export default function App() {
               <BriefingView briefing={briefing} headingRef={briefingHeading} playing={playing} audioRef={audio}
                 onPlaybackChange={setPlaying} onAudioError={() => { setFailedPlayback(true); setPlaying(false); }}
                 failedPlayback={failedPlayback} audioError={audioError} expanded={expanded} onExpand={setExpanded}
-                onRetry={retryAudio} busy={Boolean(action)} retrying={action === 'audio'} evidence={evidence}/> :
+                onRetry={retryAudio} busy={Boolean(action)} retrying={action === 'audio'} evidence={evidence}
+                onInspectEvidence={inspectEvidence}/> :
               <div className="empty-state"><div className="sound-art" aria-hidden="true"><div/><div/><div/><AudioLines size={31}/></div><h2>No briefing yet</h2><p>Choose a profile or topics, then create your first audio briefing.</p></div>}
           </div>
-          {tab === 'evidence' && <EvidenceView evidence={evidence} facts={allFacts} loading={evidenceLoading}/>}
+          <div hidden={tab !== 'evidence'}>
+            <EvidenceView evidence={evidence} facts={allFacts} loading={evidenceLoading} error={evidenceError}
+              headingRef={evidenceHeading} storyId={evidenceStoryId}
+              onBrowseAll={() => { focusEvidence.current = true; setEvidenceStoryId(null); }}
+              onReturnToStory={() => { returnToStory.current = true; changeView('listen'); }}
+              onRetry={() => { setEvidenceError(''); setEvidenceLoading(true); setEvidenceRequest(value => value + 1); }}/>
+          </div>
           {tab === 'costs' && <CostsView costs={costs} loading={costsLoading}/>}
         </section>
       </div>
@@ -265,7 +310,7 @@ export default function App() {
   </div>;
 }
 
-function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChange, onAudioError, failedPlayback, audioError, expanded, onExpand, onRetry, busy, retrying, evidence }: {
+function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChange, onAudioError, failedPlayback, audioError, expanded, onExpand, onRetry, busy, retrying, evidence, onInspectEvidence }: {
   briefing: Briefing;
   headingRef: RefObject<HTMLHeadingElement>;
   playing: boolean;
@@ -280,6 +325,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
   busy: boolean;
   retrying: boolean;
   evidence: Evidence[];
+  onInspectEvidence: (storyId: string, button: HTMLButtonElement) => void;
 }) {
   const ready = Boolean(briefing.audio_url) && !failedPlayback;
   const unavailable = briefing.audio_status === 'unavailable';
@@ -308,21 +354,120 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         </button>}
     </div>
     {(audioError || failedPlayback) && <p className="action-error" role="alert">{audioError || 'Playback failed. Reload the audio or keep reading.'}</p>}
-    <div className="story-list"><div className="section-kicker"><span>IN THIS BRIEFING</span></div>{briefing.stories.map(story => <article className="story" key={story.id}><div className="story-body"><h3>{story.title}</h3><p>{story.reason}</p><div className="transcript">{briefing.segments.filter(s => s.story_id === story.id || s.id === 'segment-' + story.id || s.fact_ids.some(fid => evidence.some(ev => ev.facts.some(f => f.id === fid && ev.id === story.id)))).map(seg => <div className="transcript-segment" key={seg.id}><p>{seg.text}{seg.conflict && <span className="conflict-flag"><Info size={12}/> Conflicting reports</span>}</p><button className="source-toggle" aria-expanded={expanded === seg.id} onClick={() => onExpand(expanded === seg.id ? null : seg.id)}><BookOpen size={13}/>{seg.sources.length} source{seg.sources.length === 1 ? '' : 's'}<ChevronDown size={13} className={expanded === seg.id ? 'rotated' : ''}/></button>{expanded === seg.id && <div className="source-list">{seg.sources.map(src => <a key={src.article_id} href={src.url} target="_blank" rel="noreferrer"><span>{src.source}</span><strong>{src.title}</strong><span className="source-out">↗</span></a>)}</div>}</div>)}</div></div></article>)}</div>
+    <div className="story-list">
+      <div className="section-kicker"><span>IN THIS BRIEFING</span></div>
+      {briefing.stories.map(story => {
+        const storyEvidence = evidence.find(item => item.id === story.id);
+        const segments = briefing.segments.filter(segment =>
+          segment.story_id === story.id || segment.id === 'segment-' + story.id ||
+          storyEvidence?.facts.some(fact => segment.fact_ids.includes(fact.id)));
+        return <article className="story" key={story.id}>
+          <div className="story-body">
+            <h3>{story.title}</h3>
+            <p>{story.reason}</p>
+            <div className="transcript">
+              {segments.map(segment => <div className="transcript-segment" key={segment.id}>
+                <p>{segment.text}{segment.conflict && <span className="conflict-flag"><Info size={12}/> Conflicting reports</span>}</p>
+                <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>
+                  <BookOpen size={13}/>{segment.sources.length} {segment.sources.length === 1 ? 'source' : 'sources'}
+                  <ChevronDown size={13} className={expanded === segment.id ? 'rotated' : ''}/>
+                </button>
+                {expanded === segment.id && <div className="source-list">
+                  {segment.sources.map(src => <a key={src.article_id} href={src.url} target="_blank" rel="noreferrer">
+                    <span>{src.source}</span><strong>{src.title}</strong><span className="source-out">↗</span>
+                  </a>)}
+                </div>}
+              </div>)}
+            </div>
+            {storyEvidence && <button className="source-toggle" aria-label={`Inspect evidence for ${story.title}`} onClick={event => onInspectEvidence(story.id, event.currentTarget)}>
+              <BookOpen size={13}/> Inspect evidence
+            </button>}
+          </div>
+        </article>;
+      })}
+    </div>
     <div className="voice-disclosure"><span className="voice-icon"><AudioLines size={16}/></span><p><strong>About this audio</strong><br/>The narration is AI-generated. Story selection and summaries are grounded in the cited reporting. Listen critically, especially where sources disagree.</p><BadgeCheck size={17} className="disclosure-check"/></div>
   </div>;
 }
 
-function EvidenceView({ evidence, facts, loading }: { evidence: Evidence[]; facts: Fact[]; loading: boolean }) {
+function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, onBrowseAll, onReturnToStory, onRetry }: {
+  evidence: Evidence[];
+  facts: Fact[];
+  loading: boolean;
+  error: string;
+  headingRef: RefObject<HTMLHeadingElement>;
+  storyId: string | null;
+  onBrowseAll: () => void;
+  onReturnToStory: () => void;
+  onRetry: () => void;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(20);
+  const currentStory = evidence.find(item => item.id === storyId);
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
     return evidence.filter(story => !term || [story.title, ...story.articles.map(article => article.title + ' ' + article.source)].some(value => value.toLowerCase().includes(term)))
       .sort((left, right) => right.articles.length - left.articles.length || (right.publication_date ?? '').localeCompare(left.publication_date ?? ''));
   }, [evidence, query]);
-  return <div className="data-view"><div className="data-heading"><span className="step-label">SHOW YOUR WORK</span><h2>Evidence, in the open.</h2><p>Every briefing is built from reporting and extracted claims. Follow the links back to their sources.</p></div>{loading ? <LoadingRow/> : evidence.length === 0 ? <EmptyRow text="Evidence data is not available yet."/> : <><div className="evidence-summary"><span><strong>{evidence.length}</strong> story clusters</span><span><strong>{facts.length}</strong> extracted claims</span></div>{evidence.length > 20 && <label className="evidence-search">Find a story or publisher<input type="search" value={query} onChange={event => { setQuery(event.target.value); setLimit(20); }} /></label>}{filtered.length === 0 && <EmptyRow text="No stories match your search."/>}{filtered.slice(0, limit).map(item => <article className="evidence-card" key={item.id}><button className="evidence-title" onClick={() => setOpen(open === item.id ? null : item.id)} aria-expanded={open === item.id}><span><span className="evidence-count">{item.articles.length} SOURCES</span><strong>{item.title}</strong></span><ChevronDown size={17} className={open === item.id ? 'rotated' : ''}/></button>{open === item.id && <div className="evidence-detail"><div className="evidence-sources">{item.articles.map(a => <a key={a.article_id} href={a.url} target="_blank" rel="noreferrer"><span>{a.source}</span><strong>{a.title}</strong><span>Open source ↗</span></a>)}</div>{item.facts.length > 0 && <div className="fact-list"><span className="section-kicker">EXTRACTED CLAIMS</span>{item.facts.map(f => <div className="fact" key={f.id}><span className={['conflict', 'unresolved', 'needs_review'].includes(f.conflict_status) ? 'fact-dot conflict' : 'fact-dot'}/><div><p>{f.statement}</p>{(f.value || f.unit) && <span>{f.value} {f.unit}</span>}{f.evidence && <blockquote>“{f.evidence}”</blockquote>}</div></div>)}</div>}</div>}</article>)}{filtered.length > limit && <button className="retry-audio more-evidence" onClick={() => setLimit(value => value + 20)}>Show more stories ({limit} of {filtered.length})</button>}</>}</div>;
+  const stories = currentStory ? [currentStory] : filtered.slice(0, limit);
+
+  return <div className="data-view">
+    <div className="data-heading">
+      <span className="step-label">SHOW YOUR WORK</span>
+      <h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>{currentStory ? 'Evidence for this story' : 'Evidence, in the open.'}</h2>
+      <p>Every briefing is built from reporting and extracted claims. Follow the links back to their sources.</p>
+    </div>
+    {loading ? <LoadingRow text="Loading evidence…"/> : error ?
+      <div>
+        <p className="action-error" role="alert">{error}</p>
+        <button className="retry-audio" onClick={onRetry}><RotateCw size={14}/> Retry loading evidence</button>
+      </div> : evidence.length === 0 ? <EmptyRow text="There are no prepared stories to inspect yet."/> : <>
+        {currentStory ?
+          <div className="evidence-actions">
+            <button className="source-toggle" onClick={onReturnToStory}>Back to briefing story</button>
+            <button className="source-toggle" onClick={onBrowseAll}>Browse all evidence</button>
+          </div> :
+          <>
+            <div className="evidence-summary">
+              <span><strong>{evidence.length}</strong> story clusters</span>
+              <span><strong>{facts.length}</strong> extracted claims</span>
+            </div>
+            {evidence.length > 1 && <label className="evidence-search">Find a story or publisher
+              <input type="search" value={query} onChange={event => { setQuery(event.target.value); setLimit(20); }}/>
+            </label>}
+            {filtered.length === 0 && <EmptyRow text="No stories match your search."/>}
+          </>}
+        {stories.map(item => {
+          const expanded = Boolean(currentStory) || open === item.id;
+          return <article className="evidence-card" key={item.id}>
+            {currentStory ?
+              <h3 className="evidence-title"><strong>{item.title}</strong></h3> :
+              <button className="evidence-title" onClick={() => setOpen(expanded ? null : item.id)} aria-expanded={expanded}>
+                <span><span className="evidence-count">{item.articles.length} SOURCES</span><strong>{item.title}</strong></span>
+                <ChevronDown size={17} className={expanded ? 'rotated' : ''}/>
+              </button>}
+            {expanded && <div className="evidence-detail">
+              <div className="evidence-sources">
+                {item.articles.map(article => <a key={article.article_id} href={article.url} target="_blank" rel="noreferrer">
+                  <span>{article.source}</span><strong>{article.title}</strong><span>Open source ↗</span>
+                </a>)}
+              </div>
+              {item.facts.length > 0 && <div className="fact-list">
+                <span className="section-kicker">EXTRACTED CLAIMS</span>
+                {item.facts.map(fact => <div className="fact" key={fact.id}>
+                  <span className={['conflict', 'unresolved', 'needs_review'].includes(fact.conflict_status) ? 'fact-dot conflict' : 'fact-dot'}/>
+                  <div><p>{fact.statement}</p>{(fact.value || fact.unit) && <span>{fact.value} {fact.unit}</span>}{fact.evidence && <blockquote>“{fact.evidence}”</blockquote>}</div>
+                </div>)}
+              </div>}
+            </div>}
+          </article>;
+        })}
+        {!currentStory && filtered.length > limit && <button className="retry-audio more-evidence" onClick={() => setLimit(value => value + 20)}>
+          Show more stories ({limit} of {filtered.length})
+        </button>}
+      </>}
+  </div>;
 }
 function CostsView({ costs, loading }: { costs: Costs | null; loading: boolean }) {
   return <div className="data-view"><div className="data-heading"><span className="step-label">TRANSPARENT BY DESIGN</span><h2>What does it cost?</h2><p>Provider usage and estimated costs for preparing stories and producing briefings.</p></div>{loading ? <LoadingRow/> : !costs ? <EmptyRow text="Cost estimates are not available right now."/> : <><div className="cost-hero"><div><span className="step-label">ESTIMATED PER BRIEFING</span><strong>{money(costs.per_briefing_usd)}</strong><span>for each generated briefing</span></div><div className="cost-icon"><AudioLines size={24}/></div></div><div className="cost-table-wrap"><table className="cost-table"><thead><tr><th>Stage</th><th>Calls</th><th>Tokens / chars</th><th>Est. cost</th></tr></thead><tbody>{costs.stages.map((s, i) => <tr key={`${s.stage}-${i}`}><td>{s.stage}</td><td>{s.calls}</td><td>{s.input_tokens + s.output_tokens > 0 ? `${(s.input_tokens + s.output_tokens).toLocaleString()} tokens` : `${s.characters.toLocaleString()} chars`}</td><td>{money(s.estimated_usd)}</td></tr>)}</tbody><tfoot><tr><td colSpan={3}>Per briefing total</td><td>{money(costs.per_briefing_usd)}</td></tr></tfoot></table></div><div className="cost-notes"><div><span className="step-label">PREPARATION</span><strong>{money(costs.preparation_usd)}</strong><p>Preparation across {costs.article_count.toLocaleString()} articles.</p></div><div><span className="step-label">10X ARTICLE VOLUME</span><strong>{money(costs.ten_x_preparation_usd)}</strong><p>Projected preparation cost at ten times the article volume.</p></div></div><div className="cost-footnote"><Info size={14}/><span>Estimates are indicative and depend on the models and audio length used. Mode: {costs.mode}.</span></div></>}</div>;
