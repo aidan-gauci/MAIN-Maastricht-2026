@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AudioLines, BadgeCheck, BookOpen, Check, ChevronDown, CircleHelp, Clock3, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, Waves, Waypoints, X } from 'lucide-react';
+import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
 import { TracesView, type TraceFocus } from './traces';
+import { ThemeToggle } from './theme';
+import logoForLight from './assets/brand/maze-logo-for-light-mode.svg';
+import logoForDark from './assets/brand/maze-logo-for-dark-mode.svg';
 
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
 type Source = { article_id: string; title: string; source: string; url: string };
@@ -362,12 +365,20 @@ export default function App() {
   }
 
   return <div className="app-shell">
-    <header className="topbar"><a className="brand" href="#top" aria-label="Liquid Briefing home"><span className="brand-mark"><Waves size={18}/></span><span>liquid<span className="brand-light">briefing</span></span></a></header>
+    <header className="topbar"><div className="topbar-inner">
+      <a className="brand" href="#top" aria-label="Maze home">
+        {/* Both logos are rendered; CSS shows the one for the active theme, so there is no flash and no script involved. */}
+        <img className="brand-logo brand-logo-light" src={logoForLight} alt="Maze" width="99" height="48"/>
+        <img className="brand-logo brand-logo-dark" src={logoForDark} alt="Maze" width="99" height="48"/>
+      </a>
+      <ThemeToggle/>
+    </div></header>
     <main id="top">
-      <section className="intro"><div className="intro-title"><div className="eyebrow">PERSONAL AUDIO BRIEFING</div><h1>News worth <em>your attention.</em></h1></div><p className="intro-copy">Source-linked stories, voiced for your interests.</p></section>
+      <section className="intro"><div className="intro-title"><h1>Find your way through the news.</h1></div><p className="intro-copy">Short audio briefings. Every figure traced to its source.</p></section>
+      <TrailPath/>
       <div className="workspace">
         <aside className="setup-card" aria-label="Briefing preferences">
-          <div className="card-heading"><div><span className="step-label">BRIEFING SETTINGS</span><h2>Choose your focus</h2></div></div>
+          <div className="card-heading"><h2>Choose your focus</h2></div>
           <div className="mode-switch" role="group" aria-label="Personalization mode">
             <button aria-pressed={mode === 'profile'} className={mode === 'profile' ? 'selected' : ''} onClick={() => setMode('profile')}>Listener profile</button>
             <button aria-pressed={mode === 'wildcard'} className={mode === 'wildcard' ? 'selected' : ''} onClick={() => setMode('wildcard')}>Custom briefing</button>
@@ -385,14 +396,13 @@ export default function App() {
                 <select id="profile" value={profileId} onChange={event => setProfileId(event.target.value)}>
                   {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
                 </select>
-                <ChevronDown size={16}/>
               </div>
               {activeProfile && <>
                 {activeProfile.description && <p className="profile-description">{activeProfile.description}</p>}
                 <div className="settings-row">
                   {activeProfile.duration && <span><Clock3 size={15}/>About {activeProfile.duration} minutes</span>}
                   {activeProfile.language && <span><AudioLines size={15}/>{languageNames.of(activeProfile.language)}</span>}
-                  {activeProfile.expertise && <span><Sparkles size={15}/>{activeProfile.expertise}</span>}
+                  {activeProfile.expertise && <span><Gauge size={15}/>{activeProfile.expertise}</span>}
                 </div>
               </>}
             </div> :
@@ -420,7 +430,7 @@ export default function App() {
               </div>
             </div>}
           <div className="delivery-settings">
-            <div className="delivery-heading"><span className="step-label">DELIVERY SETTINGS</span><p>Choose how your briefing should be delivered.</p></div>
+            <div className="delivery-heading"><h3>Delivery</h3><p>Choose how your briefing should be delivered.</p></div>
             <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageNames.of(value) ?? value.toUpperCase()}</option>)}</select></label>
             <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>
             <label>Voice preset<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value }))}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
@@ -442,7 +452,7 @@ export default function App() {
             </div>
           </details>}
           <button className="primary-button" onClick={makeBriefing} disabled={Boolean(action) || preferencesLoading || !canGenerate}>
-            {action === 'briefing' ? <><LoaderCircle className="spin" size={17}/> Preparing your briefing</> : <><Sparkles size={16}/> Create my briefing <span className="button-arrow" aria-hidden="true">→</span></>}
+            {action === 'briefing' ? <><LoaderCircle className="spin" size={17}/> Preparing your briefing</> : 'Create my briefing'}
           </button>
           <p className={settingsChanged && action !== 'briefing' ? 'microcopy' : 'visually-hidden'} role="status">
             {action === 'briefing' ? 'Preparing your briefing.' : settingsChanged ? 'Settings changed. Create a new briefing to apply them.' : ''}
@@ -459,9 +469,9 @@ export default function App() {
               <button aria-pressed={tab === 'costs'} className={tab === 'costs' ? 'content-tab active' : 'content-tab'} onClick={() => changeView('costs')}><Info size={15}/> Costs</button>
             </nav>
           </div>
-          {error && <div role="alert" className="error-banner"><CircleHelp size={16}/><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}><X size={15}/></button></div>}
+          {error && <div role="alert" className="error-banner"><CircleAlert size={16} aria-hidden="true"/><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}><X size={15}/></button></div>}
           <div hidden={tab !== 'listen'}>
-            {history.length > 0 && <div className="briefing-history"><span className="section-kicker">DELIVERED BRIEFINGS</span>{history.map(item => <button key={item.id} className={briefing?.id === item.id ? 'history-item selected' : 'history-item'} onClick={() => setBriefing(item)}><span>{item.profile_name} · {item.language.toUpperCase()}</span><strong>{item.stories.length} stories</strong></button>)}</div>}
+            {history.length > 0 && <div className="briefing-history"><span className="section-kicker">Delivered briefings</span>{history.map(item => <button key={item.id} className={briefing?.id === item.id ? 'history-item selected' : 'history-item'} onClick={() => setBriefing(item)}><span>{item.profile_name}</span><span className="lang-tag">{item.language.toUpperCase()}</span><strong>{item.stories.length} {item.stories.length === 1 ? 'story' : 'stories'}</strong></button>)}</div>}
             {briefing ?
               <BriefingView briefing={briefing} headingRef={briefingHeading} playing={playing} audioRef={audio}
                 onPlaybackChange={setPlaying} onAudioError={() => { setFailedPlayback(true); setPlaying(false); }}
@@ -469,7 +479,7 @@ export default function App() {
                 onRetry={retryAudio} busy={Boolean(action)} retrying={action === 'audio'} evidence={evidence}
                 onInspectEvidence={inspectEvidence} onTrace={inspectTrace}
                 ratings={ratings} ratingBusy={ratingBusy} onRate={rateStory}/> :
-              <div className="empty-state"><div className="sound-art" aria-hidden="true"><div/><div/><div/><AudioLines size={31}/></div><h2>No briefing yet</h2><p>Choose a profile or topics, then create your first audio briefing.</p></div>}
+              <div className="empty-state"><h2>No briefing yet</h2><p>Choose a profile or topics, then create your first audio briefing.</p></div>}
           </div>
           <div hidden={tab !== 'evidence'}>
             <EvidenceView evidence={evidence} facts={allFacts} loading={evidenceLoading} error={evidenceError}
@@ -487,7 +497,7 @@ export default function App() {
           {tab === 'costs' && <CostsView costs={costs} loading={costsLoading}/>}
         </section>
       </div>
-      <footer><span>LIQUID BRIEFING</span><span>Source links open original reporting.</span></footer>
+      <footer><span>Maze</span><span>Source links open original reporting.</span></footer>
     </main>
   </div>;
 }
@@ -527,14 +537,14 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
   return <div className="briefing-view">
     <div className="briefing-meta">
       <span className="status-chip"><span className={ready ? 'live-dot' : 'status-dot'}/>{ready ? 'Ready to listen' : 'Transcript ready'}</span>
-      <span>{briefing.profile_name} <b>·</b> {languageNames.of(briefing.language)}</span>
+      <span className="briefing-for"><strong>{briefing.profile_name}</strong><span className="lang-tag">{languageNames.of(briefing.language)}</span></span>
     </div>
     <div className="briefing-title-row">
-      <div><span className="step-label">YOUR PERSONAL BRIEFING</span><h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>Today, in context.</h2></div>
-      <span className="duration-pill" title={briefing.requested_minutes ? `You asked for about ${briefing.requested_minutes} minutes. Length depends on how many verified figures the reporting contains.` : undefined}>
-        {storyCount} {storyCount === 1 ? 'story' : 'stories'}
-        {typeof briefing.estimated_seconds === 'number' && <> · {briefing.estimated_seconds < 60 ? 'under 1 min' : `about ${Math.round(briefing.estimated_seconds / 60)} min`}</>}
-      </span>
+      <h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>Today, in context.</h2>
+      <div className="briefing-facts" title={briefing.requested_minutes ? `You asked for about ${briefing.requested_minutes} minutes. Length depends on how many verified figures the reporting contains.` : undefined}>
+        <span>{storyCount} {storyCount === 1 ? 'story' : 'stories'}</span>
+        {typeof briefing.estimated_seconds === 'number' && <span><Clock3 size={14} aria-hidden="true"/>{briefing.estimated_seconds < 60 ? 'under 1 min' : `about ${Math.round(briefing.estimated_seconds / 60)} min`}</span>}
+      </div>
     </div>
     <div className={ready ? 'player ready' : 'player'}>
       <div className="player-info">
@@ -558,9 +568,9 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         </button>}
     </div>
     {(audioError || failedPlayback) && <p className="action-error" role="alert">{audioError || 'Playback failed. Reload the audio or keep reading.'}</p>}
-    {ready && <section className="briefing-sources" aria-label="Sources used by this briefing"><div><span className="step-label">SOURCES USED</span><p>Reporting cited in this briefing.</p></div>{usedSources.length ? <div className="briefing-source-list">{usedSources.map(source => <a key={source.article_id} href={source.url} target="_blank" rel="noreferrer"><span>{source.source}</span><strong>{source.title}</strong></a>)}</div> : <p className="no-sources">No source links were attached to this briefing.</p>}</section>}
+    {ready && <section className="briefing-sources" aria-label="Sources used by this briefing"><div><h3 className="block-title">Sources used</h3><p>Reporting cited in this briefing.</p></div>{usedSources.length ? <div className="briefing-source-list">{usedSources.map(source => <a key={source.article_id} href={source.url} target="_blank" rel="noreferrer"><span>{source.source}</span><strong>{source.title}</strong></a>)}</div> : <p className="no-sources">No source links were attached to this briefing.</p>}</section>}
     <div className="story-list">
-      <div className="section-kicker"><span>IN THIS BRIEFING</span></div>
+      <div className="section-kicker"><span>In this briefing</span></div>
       {briefing.stories.map(story => {
         const storyEvidence = evidence.find(item => item.id === story.id);
         const segments = briefing.segments.filter(segment =>
@@ -597,7 +607,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         </article>;
       })}
     </div>
-    <div className="voice-disclosure"><span className="voice-icon"><AudioLines size={16}/></span><p><strong>About this audio</strong><br/>The narration is AI-generated. Story selection and summaries are grounded in the cited reporting. Listen critically, especially where sources disagree.</p><BadgeCheck size={17} className="disclosure-check"/></div>
+    <div className="voice-disclosure"><p><strong>About this audio</strong><br/>The narration is AI-generated. Story selection and summaries are grounded in the cited reporting. Listen critically, especially where sources disagree.</p></div>
   </div>;
 }
 
@@ -625,7 +635,6 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
 
   return <div className="data-view">
     <div className="data-heading">
-      <span className="step-label">SHOW YOUR WORK</span>
       <h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>{currentStory ? 'Evidence for this story' : 'Evidence, in the open.'}</h2>
       <p>Every briefing is built from reporting and extracted claims. Follow the links back to their sources.</p>
     </div>
@@ -655,7 +664,7 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
             {currentStory ?
               <h3 className="evidence-title"><strong>{item.title}</strong></h3> :
               <button className="evidence-title" onClick={() => setOpen(expanded ? null : item.id)} aria-expanded={expanded}>
-                <span><span className="evidence-count">{item.articles.length} {item.articles.length === 1 ? 'SOURCE' : 'SOURCES'}</span><strong>{item.title}</strong></span>
+                <span><span className="evidence-count">{item.articles.length} {item.articles.length === 1 ? 'source' : 'sources'}</span><strong>{item.title}</strong></span>
                 <ChevronDown size={17} className={expanded ? 'rotated' : ''}/>
               </button>}
             {expanded && <div className="evidence-detail">
@@ -665,7 +674,7 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
                 </a>)}
               </div>
               {item.facts.length > 0 && <div className="fact-list">
-                <span className="section-kicker">EXTRACTED CLAIMS</span>
+                <span className="section-kicker">Extracted claims</span>
                 {item.facts.map(fact => <div className="fact" key={fact.id}>
                   <span className={['conflict', 'unresolved', 'needs_review'].includes(fact.conflict_status) ? 'fact-dot conflict' : 'fact-dot'}/>
                   <div><p>{fact.statement}</p>{(fact.value || fact.unit) && <span>{fact.value} {fact.unit}</span>}{fact.evidence && <blockquote>“{fact.evidence}”</blockquote>}</div>
@@ -681,7 +690,15 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
   </div>;
 }
 function CostsView({ costs, loading }: { costs: Costs | null; loading: boolean }) {
-  return <div className="data-view"><div className="data-heading"><span className="step-label">TRANSPARENT BY DESIGN</span><h2>What does it cost?</h2><p>Provider usage and estimated costs for preparing stories and producing briefings.</p></div>{loading ? <LoadingRow/> : !costs ? <EmptyRow text="Cost estimates are not available right now."/> : <><div className="cost-hero"><div><span className="step-label">ESTIMATED PER BRIEFING</span><strong>{money(costs.per_briefing_usd)}</strong><span>average provider cost</span></div><div className="cost-icon"><AudioLines size={24}/></div></div><div className="cost-table-wrap"><table className="cost-table"><thead><tr><th>Stage</th><th>Calls</th><th>Tokens / chars</th><th>Est. cost</th></tr></thead><tbody>{costs.stages.map((s, i) => <tr key={`${s.stage}-${i}`}><td>{s.stage}</td><td>{s.calls}</td><td>{s.input_tokens + s.output_tokens > 0 ? `${(s.input_tokens + s.output_tokens).toLocaleString()} tokens` : `${s.characters.toLocaleString()} chars`}</td><td>{money(s.estimated_usd)}</td></tr>)}</tbody><tfoot><tr><td colSpan={3}>Per briefing total</td><td>{money(costs.per_briefing_usd)}</td></tr></tfoot></table></div><div className="cost-notes"><div><span className="step-label">PREPARATION</span><strong>{money(costs.preparation_usd)}</strong><p>Preparation across {costs.article_count.toLocaleString()} articles.</p></div><div><span className="step-label">10X ARTICLE VOLUME</span><strong>{money(costs.ten_x_preparation_usd)}</strong><p>Projected preparation cost at ten times the article volume.</p></div></div><div className="cost-footnote"><Info size={14}/><span>Speech calls count newly synthesized clips. Briefings can reuse them. Mode: {costs.mode}.</span></div></>}</div>;
+  return <div className="data-view"><div className="data-heading"><h2>What does it cost?</h2><p>Provider usage and estimated costs for preparing stories and producing briefings.</p></div>{loading ? <LoadingRow/> : !costs ? <EmptyRow text="Cost estimates are not available right now."/> : <><div className="cost-hero"><span>Estimated cost per briefing</span><strong>{money(costs.per_briefing_usd)}</strong><span>average provider cost</span></div><div className="cost-table-wrap"><table className="cost-table"><thead><tr><th>Stage</th><th>Calls</th><th>Tokens / chars</th><th>Est. cost</th></tr></thead><tbody>{costs.stages.map((s, i) => <tr key={`${s.stage}-${i}`}><td>{s.stage}</td><td>{s.calls}</td><td>{s.input_tokens + s.output_tokens > 0 ? `${(s.input_tokens + s.output_tokens).toLocaleString()} tokens` : `${s.characters.toLocaleString()} chars`}</td><td>{money(s.estimated_usd)}</td></tr>)}</tbody><tfoot><tr><td colSpan={3}>Per briefing total</td><td>{money(costs.per_briefing_usd)}</td></tr></tfoot></table></div><div className="cost-notes"><div><span>Preparation</span><strong>{money(costs.preparation_usd)}</strong><p>Preparation across {costs.article_count.toLocaleString()} articles.</p></div><div><span>At 10x article volume</span><strong>{money(costs.ten_x_preparation_usd)}</strong><p>Projected preparation cost at ten times the article volume.</p></div></div><div className="cost-footnote"><Info size={14}/><span>Speech calls count newly synthesized clips. Briefings can reuse them. Mode: {costs.mode}.</span></div></>}</div>;
+}
+// The signature: one thin winding line, drawn once on load, that leads from the headline into the briefing.
+// It uses the same 2px line and arrowhead as the connectors in Linked Traces.
+function TrailPath() {
+  return <svg className="hero-path" viewBox="0 0 420 72" aria-hidden="true" focusable="false">
+    <path className="hero-path-line" pathLength={1} d="M2 8 C 60 8 70 44 128 44 C 186 44 190 12 248 12 C 306 12 330 40 398 40 L 398 59"/>
+    <polygon className="hero-path-head" points="389,58 407,58 398,71"/>
+  </svg>;
 }
 function LoadingRow({ text = 'Loading data…' }: { text?: string }) { return <div className="data-loading" role="status"><LoaderCircle className="spin" size={18} aria-hidden="true"/> {text}</div>; }
 function EmptyRow({ text }: { text: string }) { return <div className="data-loading" role="status">{text}</div>; }

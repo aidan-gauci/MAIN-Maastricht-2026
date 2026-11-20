@@ -3,14 +3,33 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <meta name="theme-color" content="#f7f6f2"/>
-  <meta name="description" content="A thoughtful daily audio briefing, shaped around what matters to you."/>
-  <title>Liquid Briefing | Listen with context</title>
+  <meta name="color-scheme" content="light dark"/>
+  <meta name="theme-color" content="#f5f3ec" media="(prefers-color-scheme: light)"/>
+  <meta name="theme-color" content="#121d18" media="(prefers-color-scheme: dark)"/>
+  <meta name="description" content="Maze turns the news into short audio briefings shaped to your interests, with every figure traced to its source."/>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+  <title>Maze | Find your way through the news</title>
+  <script>
+    // Apply the saved colour theme before first paint so the page never flashes the wrong one.
+    // 'system' (or no saved choice) leaves the decision to the OS via prefers-color-scheme in the stylesheet.
+    // Keep the key and colours in step with src/theme.tsx.
+    (function () {
+      try {
+        var theme = localStorage.getItem('maze-theme');
+        if (theme !== 'light' && theme !== 'dark') theme = 'system';
+        document.documentElement.setAttribute('data-theme', theme);
+        if (theme !== 'system') {
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', theme === 'dark' ? '#121d18' : '#f5f3ec');
+        }
+      } catch (error) { /* storage blocked: follow the OS */ }
+    })();
+  </script>
 </head>
 <body>
   <noscript>
     <main>
-      <h1>JavaScript is required to use Liquid Briefing</h1>
+      <h1>JavaScript is required to use Maze</h1>
       <p>Enable JavaScript for this site in your browser settings, then reload the page.</p>
     </main>
   </noscript>

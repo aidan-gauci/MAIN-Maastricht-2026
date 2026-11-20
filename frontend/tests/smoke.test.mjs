@@ -69,7 +69,7 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
     try {
       const page = await context.newPage();
       await page.goto(origin);
-      await page.getByRole('heading', { name: 'JavaScript is required to use Liquid Briefing' }).waitFor();
+      await page.getByRole('heading', { name: 'JavaScript is required to use Maze' }).waitFor();
     } finally {
       await context.close();
     }
@@ -80,6 +80,59 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.goto(origin);
+  await page.getByRole('img', { name: 'Maze' }).waitFor();
+  assert.equal(await page.title(), 'Maze | Find your way through the news');
+  await page.getByRole('heading', { level: 1, name: 'Find your way through the news.' }).waitFor();
+
+  // Theme: follows the OS by default; the header toggle overrides it, swaps the logo and survives a reload.
+  const tokens = () => page.evaluate(() => {
+    const names = new Set();
+    for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) {
+      if (rule.selectorText === ':root') for (const name of rule.style) if (name.startsWith('--')) names.add(name);
+    }
+    const style = getComputedStyle(document.documentElement);
+    return Object.fromEntries([...names].map(name => [name, style.getPropertyValue(name).trim()]));
+  });
+  const themeState = () => page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme,
+    scheme: getComputedStyle(document.documentElement).colorScheme,
+    logos: [...document.querySelectorAll('.brand-logo')].filter(img => img.getClientRects().length > 0).map(img => img.getAttribute('src')),
+  }));
+  const themeButton = name => page.getByRole('group', { name: 'Color theme' }).getByRole('button', { name, exact: true });
+  await page.emulateMedia({ colorScheme: 'light' });
+  const lightTokens = await tokens();
+  const systemLight = await themeState();
+  assert.deepEqual([systemLight.theme, systemLight.scheme, systemLight.logos.length], ['system', 'light', 1]);
+  assert.match(systemLight.logos[0], /maze-logo-for-light-mode/);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const systemDark = await themeState();
+  assert.equal(systemDark.scheme, 'dark', 'System follows the OS preference');
+  assert.equal(systemDark.logos.length, 1);
+  assert.match(systemDark.logos[0], /maze-logo-for-dark-mode/);
+  const systemDarkTokens = await tokens();
+  assert.notEqual(systemDarkTokens['--bg'], lightTokens['--bg']);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await themeButton('Dark').click();
+  assert.equal(await themeButton('Dark').getAttribute('aria-pressed'), 'true');
+  const forcedDark = await themeState();
+  assert.deepEqual([forcedDark.theme, forcedDark.scheme], ['dark', 'dark']);
+  assert.match(forcedDark.logos.join(), /^[^,]*maze-logo-for-dark-mode[^,]*$/, 'dark logo only');
+  assert.deepEqual(await tokens(), systemDarkTokens, 'the OS-dark and forced-dark palettes must be identical');
+  assert.equal(await page.evaluate(() => localStorage.getItem('maze-theme')), 'dark');
+  await page.reload();
+  await page.getByRole('img', { name: 'Maze' }).waitFor();
+  assert.equal((await themeState()).theme, 'dark', 'saved choice is applied after a reload');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await themeButton('Light').click();
+  const forcedLight = await themeState();
+  assert.deepEqual([forcedLight.theme, forcedLight.scheme], ['light', 'light']);
+  assert.match(forcedLight.logos.join(), /^[^,]*maze-logo-for-light-mode[^,]*$/, 'light logo only');
+  assert.deepEqual(await tokens(), lightTokens);
+  await themeButton('System').click();
+  await page.emulateMedia({ colorScheme: 'light' });
+  assert.equal(await page.evaluate(() => localStorage.getItem('maze-theme')), 'system');
+  assert.equal((await themeState()).theme, 'system');
+
   const create = page.getByRole('button', { name: 'Create my briefing' });
   await page.getByLabel('Choose a listener profile').selectOption('markets');
   const [profileResponse] = await Promise.all([postResponse(page, '/api/briefings'), create.click()]);
@@ -116,7 +169,7 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   await evidence.waitFor();
   assert.equal(await evidence.evaluate(heading => heading === document.activeElement), true);
   await page.getByRole('heading', { name: firstStory.title, exact: true }).waitFor();
-  await page.getByText('EXTRACTED CLAIMS', { exact: true }).waitFor();
+  await page.getByText('Extracted claims', { exact: true }).waitFor();
   assert.ok(await page.locator('.fact blockquote').count() > 0);
   assert.ok((await page.locator('.evidence-sources a').evaluateAll(links =>
     links.map(link => link.getAttribute('href')),
@@ -202,6 +255,8 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   const custom = await customResponse.json();
   assert.notEqual(custom.id, briefing.id);
   assert.equal(custom.audio_status, 'ready');
-  await page.getByText(`${custom.profile_name} · English`, { exact: true }).waitFor();
+  const customMeta = page.locator('.briefing-meta .briefing-for');
+  await customMeta.getByText(custom.profile_name, { exact: true }).waitFor();
+  await customMeta.getByText('English', { exact: true }).waitFor();
   assert.deepEqual(pageErrors, []);
 });

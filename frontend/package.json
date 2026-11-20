@@ -1,5 +1,5 @@
 {
-  "name": "liquid-briefing-listener",
+  "name": "maze-listener",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -10,6 +10,8 @@
     "test:smoke": "npm run build && node --test tests/smoke.test.mjs"
   },
   "dependencies": {
+    "@fontsource-variable/newsreader": "^5.3.0",
+    "@fontsource-variable/schibsted-grotesk": "^5.3.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
