@@ -351,7 +351,7 @@ def create_briefing(request: BriefingRequest):
             feedback = [{"story_id": story_id, "rating": rating} for story_id, rating in store.feedback(listener_id).items()]
         return generate_briefing(store, profile, listener_id=listener_id, region=request.region,
                                  voice_preset=request.voice_preset, spoken_fact_ids=spoken,
-                                 feedback_events=feedback)
+                                 feedback_events=feedback, expressiveness=request.expressiveness)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:

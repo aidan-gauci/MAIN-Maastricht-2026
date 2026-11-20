@@ -65,6 +65,11 @@ main{padding:23px 28px 0}
 .player-info span{font-size:13px;line-height:1.4;color:#59685e}
 .audio-controls{display:block;flex:1 1 230px;width:230px;max-width:min(100%,360px);height:42px}
 .retry-audio{font-size:13px;padding:9px 11px;color:#365a43;border-color:#cbd8cc;min-height:40px}
+.player-controls{display:flex;flex-direction:column;gap:7px;flex:1 1 230px;min-width:0;max-width:min(100%,360px)}
+.player-controls .audio-controls{width:100%;max-width:none;flex:none}
+.speed-control{display:flex;gap:6px;flex-wrap:wrap}
+.speed-option{font-size:12px;font-weight:600;padding:5px 10px;min-height:32px;min-width:44px;border-radius:999px;color:#365a43;border:1px solid #cbd8cc;background:transparent}
+.speed-option.active{background:#365a43;border-color:#365a43;color:#fff}
 .story-list{margin-top:21px}
 .story{display:block;padding:15px 0}
 .story-body h3{font-size:18px;line-height:1.35;color:#304238}

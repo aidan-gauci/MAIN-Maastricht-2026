@@ -49,6 +49,24 @@ const newListenerId = () => {
   localStorage.setItem(key, id);
   return id;
 };
+// Per-browser conveniences; storage can be unavailable (private windows), so reads and writes never throw.
+const readSetting = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
+const writeSetting = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* ignore */ } };
+// Speed is applied by the browser to the existing file, so changing it never re-generates audio.
+const PLAYBACK_SPEEDS = [0.8, 1, 1.2, 1.5];
+const SPEED_KEY = 'liquid-briefing-playback-speed';
+const storedSpeed = () => { const value = Number(readSetting(SPEED_KEY)); return PLAYBACK_SPEEDS.includes(value) ? value : 1; };
+const applySpeed = (element: HTMLAudioElement | null, speed: number) => {
+  if (!element) return;
+  element.preservesPitch = true;
+  element.defaultPlaybackRate = speed;
+  element.playbackRate = speed;
+};
+// Expressiveness is sent with a new briefing and used only when that briefing's audio is generated.
+type Expressiveness = 'calm' | 'balanced' | 'expressive';
+const EXPRESSIVENESS: { id: Expressiveness; label: string }[] = [{ id: 'calm', label: 'Calm' }, { id: 'balanced', label: 'Balanced' }, { id: 'expressive', label: 'Expressive' }];
+const EXPRESSIVENESS_KEY = 'liquid-briefing-expressiveness';
+const storedExpressiveness = (): Expressiveness => { const value = readSetting(EXPRESSIVENESS_KEY); return EXPRESSIVENESS.some(level => level.id === value) ? value as Expressiveness : 'balanced'; };
 // Scheduled delivery needs the n8n workflows, a public HTTPS backend and durable storage; hide it unless explicitly enabled.
 const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE === '1';
 const defaultTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -77,6 +95,7 @@ export default function App() {
   const [expertise, setExpertise] = useState('intermediate');
   const [duration, setDuration] = useState(5);
   const [language, setLanguage] = useState('en');
+  const [expressiveness, setExpressiveness] = useState<Expressiveness>(storedExpressiveness);
   const [action, setAction] = useState<'briefing' | 'audio' | null>(null);
   const [briefingError, setBriefingError] = useState('');
   const [audioError, setAudioError] = useState('');
@@ -231,7 +250,7 @@ export default function App() {
   const allFacts = useMemo(() => evidence.flatMap(item => item.facts), [evidence]);
   const canGenerate = mode === 'profile' ? Boolean(activeProfile) : selectedTopics.length > 0;
   const wildcard = { topics: selectedTopics, expertise, duration, language };
-  const delivery = { listener_id: listenerId, language, region: scheduleDraft.region, voice_preset: scheduleDraft.voice_preset };
+  const delivery = { listener_id: listenerId, language, region: scheduleDraft.region, voice_preset: scheduleDraft.voice_preset, expressiveness };
   const request = mode === 'profile' ? { ...delivery, profile_id: profileId } : { ...delivery, wildcard };
   const settingsKey = mode === 'profile'
     ? JSON.stringify(request)
@@ -405,6 +424,8 @@ export default function App() {
             <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageNames.of(value) ?? value.toUpperCase()}</option>)}</select></label>
             <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>
             <label>Voice preset<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value }))}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+            <label>Voice style<select value={expressiveness} aria-describedby="voice-style-note" onChange={e => { const value = e.target.value as Expressiveness; setExpressiveness(value); writeSetting(EXPRESSIVENESS_KEY, value); }}>{EXPRESSIVENESS.map(level => <option key={level.id} value={level.id}>{level.label}</option>)}</select></label>
+            <p className="microcopy" id="voice-style-note">Voice style applies to the next briefing you create. Change playback speed in the player at any time.</p>
           </div>
           {SHOW_SCHEDULE && <details className="schedule-settings">
             <summary><span><Clock3 size={15}/>Schedule delivery</span><ChevronDown size={15}/></summary>
@@ -501,6 +522,8 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
   const usedSources = [...new Map(briefing.segments.flatMap(segment => segment.sources).map(source => [source.article_id, source])).values()];
   const unavailable = briefing.audio_status === 'unavailable';
   const storyCount = briefing.stories.length;
+  const [speed, setSpeed] = useState(storedSpeed);
+  useEffect(() => { applySpeed(audioRef.current, speed); writeSetting(SPEED_KEY, String(speed)); }, [speed, audioRef, audioSrc]);
   return <div className="briefing-view">
     <div className="briefing-meta">
       <span className="status-chip"><span className={ready ? 'live-dot' : 'status-dot'}/>{ready ? 'Ready to listen' : 'Transcript ready'}</span>
@@ -519,10 +542,17 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         <span>{ready ? 'AI-generated narration' : !available ? `Audio will be available ${new Date(briefing.available_at!).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}.` : failedPlayback ? 'The audio file could not be played.' : unavailable ? 'Audio generation is unavailable.' : 'Audio is ready to generate.'}</span>
       </div>
       {ready ?
-        <audio key={audioSrc} ref={audioRef} className="audio-controls" controls preload="metadata"
-          src={audioSrc ?? undefined} aria-label={`${briefing.profile_name} audio briefing`}
-          onPlay={() => onPlaybackChange(true)} onPause={() => onPlaybackChange(false)}
-          onEnded={() => onPlaybackChange(false)} onError={onAudioError}/> :
+        <div className="player-controls">
+          <audio key={audioSrc} ref={audioRef} className="audio-controls" controls preload="metadata"
+            src={audioSrc ?? undefined} aria-label={`${briefing.profile_name} audio briefing`}
+            onLoadedMetadata={event => applySpeed(event.currentTarget, speed)}
+            onPlay={() => onPlaybackChange(true)} onPause={() => onPlaybackChange(false)}
+            onEnded={() => onPlaybackChange(false)} onError={onAudioError}/>
+          <div className="speed-control" role="group" aria-label="Playback speed">
+            {PLAYBACK_SPEEDS.map(value => <button key={value} type="button" aria-pressed={speed === value}
+              className={speed === value ? 'speed-option active' : 'speed-option'} onClick={() => setSpeed(value)}>{value}×</button>)}
+          </div>
+        </div> :
         available && <button className="retry-audio" onClick={onRetry} disabled={busy}>
           <RotateCw size={14}/>{retrying ? 'Generating audio…' : failedPlayback ? 'Reload audio' : unavailable ? 'Retry audio' : 'Generate audio'}
         </button>}

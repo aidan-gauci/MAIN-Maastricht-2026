@@ -134,7 +134,7 @@ def create_audio(briefing, store, providers, mode):
     language = briefing["language"]
     voice = (
         os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
-        sorted(voice_settings().items()),
+        sorted(voice_settings(getattr(providers, "expressiveness", "balanced")).items()),
     ) if mode == "live" else ("offline",)
     segments = briefing["segments"]
     if not segments:
