@@ -19,7 +19,7 @@ def groups(*articles):
                   for group in pipeline.group_articles(list(articles), pipeline._group_key, pipeline._day))
 
 
-EN = "Zorbo just gave Acme bulls a lifeline: find out more"
+EN = "Zorbo just handed Acme bulls a lifeline: read on"
 DE = "Zorbo verschafft Acme-Bullen eine Atempause: Details"
 SHORT_EN = "The board reshuffle lifted shares by 12 percent."
 SHORT_DE = "Die Umbesetzung im Vorstand hob die Aktie um 12 Prozent."

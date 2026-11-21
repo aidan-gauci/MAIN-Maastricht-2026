@@ -4,9 +4,9 @@ from unittest.mock import Mock
 from backend.app import pipeline
 from backend.app.providers import Providers
 
-BODY = ("Output missed expectations. industrial output growth slowed from 5.5% to 4.8% yoy, below the 5.3% forecast "
-        "from analysts. Meanwhile, goods exports surged 28.7% yoy in yuan terms, despite weak demand. "
-        "Final sales fell 0.5% qoq, equivalent to a sharp drop.")
+BODY = ("Production fell short. factory production growth eased from 5.5% to 4.8% year on year, under the 5.3% consensus "
+        "from analysts. Meanwhile, parcel shipments climbed 28.7% year on year in euro terms, despite weak demand. "
+        "Final sales fell 0.5% qoq, marking a sharp drop.")
 ARTICLE = {"article_id": "a1", "title": "Industrial output slows", "body": BODY, "source": "Test Wire",
            "url": "https://example.invalid/a1", "language": "en", "publication_date": "2026-11-19"}
 
@@ -22,8 +22,8 @@ def extract(*facts):
 class LiveEvidenceTest(unittest.TestCase):
     def test_reworded_quote_tails_and_capitals_still_cite_exact_article_text(self):
         facts = extract(
-            ("4.8", "%", "Industrial output growth slowed from 5.5% to 4.8% yoy, below expectations."),
-            ("28.7", "%", "Goods exports surged 28.7% yoy in yuan terms."),
+            ("4.8", "%", "Factory production growth eased from 5.5% to 4.8% year on year, short of consensus."),
+            ("28.7", "%", "Parcel shipments climbed 28.7% year on year in euro terms."),
             ("-0.5", "%", "Final sales fell 0.5% qoq."),
         )
         self.assertEqual(sorted(f["value"] for f in facts), ["0.5", "28.7", "4.8"])
@@ -32,10 +32,10 @@ class LiveEvidenceTest(unittest.TestCase):
 
     def test_figures_absent_from_the_article_are_still_rejected(self):
         facts = extract(
-            ("4.8", "%", "Industrial output growth slowed from 5.5% to 4.8% yoy."),
-            ("4.9", "%", "Industrial output growth slowed from 5.5% to 4.9% yoy."),
+            ("4.8", "%", "Factory production growth eased from 5.5% to 4.8% year on year."),
+            ("4.9", "%", "Factory production growth eased from 5.5% to 4.9% year on year."),
             ("12", "%", "Profits rose 12% this year."),
-            ("28.7", "billion", "Goods exports surged 28.7% yoy in yuan terms."),
+            ("28.7", "billion", "Parcel shipments climbed 28.7% year on year in euro terms."),
         )
         self.assertEqual([(f["value"], f["unit"]) for f in facts], [("4.8", "percent")])
 
