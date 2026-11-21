@@ -34,6 +34,20 @@ class VoiceCatalogueTest(unittest.TestCase):
             self.assertEqual(Providers("live", voice_preset="lily").voice_id(), "pFZP5JQG7iQjIQuC4Bku")
 
 
+class VoiceLanguageTest(unittest.TestCase):
+    def test_each_voice_reports_its_verified_languages_and_unknown_voices_none(self):
+        with patch.dict(os.environ, {"ELEVENLABS_VOICE_ID": "7jynqzOvnVP89nA7TB0m"}), patch.object(config, "MODE", "live"):
+            os.environ.pop("BRIEFING_VOICE_PRESETS", None)
+            self.assertIn("nl", config.verified_languages("brian"))
+            self.assertNotIn("nl", config.verified_languages("daniel"))
+            self.assertIn("nl", config.verified_languages("default"))  # Nick
+            for row in config.VOICE_CATALOGUE:
+                self.assertIn("en", config.verified_languages(row["id"]))
+                self.assertIn("de", config.verified_languages(row["id"]))
+        with patch.dict(os.environ, {"ELEVENLABS_VOICE_ID": "someone-else"}), patch.object(config, "MODE", "live"):
+            self.assertIsNone(config.verified_languages("default"))
+
+
 class VoiceCacheTest(unittest.TestCase):
     def test_the_same_text_in_two_voices_renders_two_files(self):
         store = SimpleNamespace(audio_dir=Path(tempfile.mkdtemp()), record_usage=lambda *a, **k: None)

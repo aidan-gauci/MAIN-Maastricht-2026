@@ -10,7 +10,14 @@ type Source = { article_id: string; title: string; source: string; url: string }
 type Story = { id: string; title: string; reason: string; title_language?: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
 type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
-type VoicePreset = { id: string; label: string; description?: string; preview?: boolean };
+type VoicePreset = { id: string; label: string; description?: string; preview?: boolean; languages?: string[] | null };
+// Every voice speaks every output language; ElevenLabs has verified only some, and elsewhere the accent may vary.
+const englishLanguageName = (code: string) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code; } catch { return code; } };
+const voiceVerifiedFor = (preset: VoicePreset | undefined, code: string) => !preset?.languages || preset.languages.includes(code);
+const voiceOptionLabel = (preset: VoicePreset, code: string) => {
+  const details = [preset.description, voiceVerifiedFor(preset, code) ? '' : `accent may vary in ${englishLanguageName(code)}`].filter(Boolean).join('; ');
+  return details ? `${preset.label} (${details})` : preset.label;
+};
 type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
 type ScheduleDraft = Omit<Schedule, 'schedule_id' | 'schedule_version' | 'generation_at' | 'delivery_at' | 'dispatch_status'>;
 type Fact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string };
@@ -461,7 +468,13 @@ export default function App() {
             <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageLabel(value)}</option>)}</select></label>
             {regions.length > 1 && <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>}
             {voicePresets.length > 1 && <div className="voice-field">
-              <label>Voice<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} aria-describedby="voice-style-note" onChange={e => { stopVoiceSample(); updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value })); }}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.description ? `${preset.label} (${preset.description})` : preset.label}</option>)}</select></label>
+              <label>Voice<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} aria-describedby="voice-style-note" onChange={e => { stopVoiceSample(); updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value })); }}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{voiceOptionLabel(preset, language)}</option>)}</select></label>
+              {(() => {
+                const chosen = voicePresets.find(preset => preset.id === scheduleDraft.voice_preset);
+                if (!chosen || voiceVerifiedFor(chosen, language)) return null;
+                const verified = voicePresets.filter(preset => preset.languages?.includes(language)).map(preset => preset.label);
+                return <p className="microcopy voice-language-note">{chosen.label} is not verified for {englishLanguageName(language)}, so the accent may vary.{verified.length > 0 && ` Verified: ${verified.join(', ')}.`}</p>;
+              })()}
               {voicePresets.find(preset => preset.id === scheduleDraft.voice_preset)?.preview && <button type="button" className="voice-sample" aria-pressed={sampleState !== 'idle'} onClick={toggleVoiceSample}>
                 {sampleState === 'loading' ? <><LoaderCircle className="spin" size={14} aria-hidden="true"/> Loading sample</> : sampleState === 'playing' ? <><Square size={13} aria-hidden="true"/> Stop sample</> : <><Play size={13} aria-hidden="true"/> Play sample</>}
               </button>}

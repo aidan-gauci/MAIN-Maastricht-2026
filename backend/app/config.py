@@ -175,6 +175,26 @@ VOICE_CATALOGUE = (
     {"id": "sarah", "label": "Sarah", "description": "American, approachable and informative", "voice_id": "Nhs7eitvQWFTQBsf0yiT"},
 )
 
+# Languages ElevenLabs has verified for each voice (from the account's voice list, 21 Nov 2026). Every voice
+# can speak all languages of eleven_multilingual_v2; in an unverified one the accent may vary. Keyed by
+# voice ID so the server's default voice is covered too when it is one of these.
+VERIFIED_LANGUAGES = {
+    "7jynqzOvnVP89nA7TB0m": ("cs", "de", "el", "en", "es", "fr", "hi", "hr", "hu", "id", "it", "ko", "ms", "nl",
+                             "no", "pl", "pt", "ru", "tr", "uk", "vi"),  # Nick
+    "onwK4e9ZLuTAKqWW03F9": ("de", "en", "tr"),  # Daniel
+    "nPczCjzI2devNBz1zQrb": ("ar", "de", "en", "hi", "nl", "pt", "ro", "sk", "zh"),  # Brian
+    "pFZP5JQG7iQjIQuC4Bku": ("cs", "de", "en", "it", "nl", "pl", "zh"),  # Lily
+    "XrExE9yKIg1WjnnlVkGX": ("ar", "de", "en", "es", "fr", "it"),  # Matilda
+    "Nhs7eitvQWFTQBsf0yiT": ("ar", "de", "en", "es", "hr", "it", "ko", "ms", "no", "pl", "pt", "ro", "ru", "ta",
+                             "tr", "uk"),  # Sarah
+}
+
+
+def verified_languages(preset_id):
+    """Verified languages of a preset's voice, or None when unknown (no label is shown then)."""
+    languages = VERIFIED_LANGUAGES.get(resolve_voice_id(preset_id))
+    return list(languages) if languages else None
+
 
 def configured_voice_presets():
     raw = os.getenv("BRIEFING_VOICE_PRESETS")

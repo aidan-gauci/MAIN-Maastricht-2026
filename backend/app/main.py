@@ -22,7 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from . import pipeline
 from .audio import audio_file
 from .config import (CORPUS, DEMO, MODE, REGIONS, ROOT, BriefingRequest, ScheduleRequest,
-                     configured_voice_presets, load_profiles, resolve_voice_id, supported_languages)
+                     configured_voice_presets, load_profiles, resolve_voice_id, supported_languages,
+                     verified_languages)
 from .importer import read_articles
 from .service import (NoRelevantStories, generate_briefing, get_store, iso_utc, list_topics,
                       local_delivery_date, next_occurrence, prepare_corpus, recommendation_topics, render_audio,
@@ -318,7 +319,8 @@ def _previews_available():
 @app.get("/api/voice-presets")
 def voice_presets():
     preview = _previews_available()
-    return [{"id": row["id"], "label": row["label"], "description": row.get("description", ""), "preview": preview}
+    return [{"id": row["id"], "label": row["label"], "description": row.get("description", ""), "preview": preview,
+             "languages": verified_languages(row["id"])}
             for row in configured_voice_presets()]
 
 
