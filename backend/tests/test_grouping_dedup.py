@@ -20,18 +20,18 @@ def groups(*articles):
 class TranslationGroupingTest(unittest.TestCase):
     def test_translation_published_minutes_later_with_the_same_figures_joins_the_original(self):
         result = groups(
-            article("en", "en", "Oil prices near $95 as supply glut grows", EN_BODY, "2026-11-16T08:16:00Z"),
-            article("de", "de", "Ölpreise nahe 95 $: Überangebot wächst", DE_BODY, "2026-11-16T08:18:00Z"),
+            article("en", "en", "Zorbo crude near 95 as stockpiles swell", EN_BODY, "2026-11-16T08:16:00Z"),
+            article("de", "de", "Zorbo-Rohöl nahe 95: Lager wachsen", DE_BODY, "2026-11-16T08:18:00Z"),
         )
         self.assertEqual(result, [["de", "en"]])
 
     def test_same_figures_hours_apart_or_different_figures_stay_separate(self):
         self.assertEqual(len(groups(
-            article("en", "en", "Oil prices near $95 as supply glut grows", EN_BODY, "2026-11-16T08:16:00Z"),
-            article("de", "de", "Ölpreise nahe 95 $: Überangebot wächst", DE_BODY, "2026-11-16T11:30:00Z"),
+            article("en", "en", "Zorbo crude near 95 as stockpiles swell", EN_BODY, "2026-11-16T08:16:00Z"),
+            article("de", "de", "Zorbo-Rohöl nahe 95: Lager wachsen", DE_BODY, "2026-11-16T11:30:00Z"),
         )), 2)
         self.assertEqual(len(groups(
-            article("en", "en", "Oil prices near $95 as supply glut grows", EN_BODY, "2026-11-16T08:16:00Z"),
+            article("en", "en", "Zorbo crude near 95 as stockpiles swell", EN_BODY, "2026-11-16T08:16:00Z"),
             article("de", "de", "Märkte im Überblick", OTHER_BODY, "2026-11-16T08:18:00Z"),
         )), 2)
 

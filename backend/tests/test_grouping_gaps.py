@@ -72,8 +72,8 @@ class FewFigureTranslationTest(unittest.TestCase):
     def test_figure_rich_translations_still_match_on_figures_within_fifteen_minutes(self):
         rich_en = "Brent traded at $95.20 after rising 2.4% this week. Inventories grew by 3.1 million barrels."
         rich_de = "Brent notierte bei 95,20 $, nach einem Plus von 2,4 % in dieser Woche. Die Lagerbestände stiegen um 3,1 Millionen Barrel."
-        result = groups(article("en", "en", "Oil prices near $95", rich_en, "2026-11-16T08:16:00Z"),
-                        article("de", "de", "Ölpreise nahe 95 $", rich_de, "2026-11-16T08:29:00Z", "Invezz - German"))
+        result = groups(article("en", "en", "Zorbo crude near 95", rich_en, "2026-11-16T08:16:00Z"),
+                        article("de", "de", "Zorbo-Rohöl nahe 95", rich_de, "2026-11-16T08:29:00Z", "Invezz - German"))
         self.assertEqual(result, [["de", "en"]])
 
 
@@ -85,8 +85,8 @@ def figures(*numbers):
 
 
 class OneOutletLookalikeTest(unittest.TestCase):
-    ANALYSIS = "Zorbo crude analysis: will oil crash below 90 as supply glut grows"
-    OUTLOOK = "Zorbo price outlook: will oil crash below 90 as supply glut grows"
+    ANALYSIS = "Zorbo crude analysis: will crude fall below 90 as stockpiles swell"
+    OUTLOOK = "Zorbo price outlook: will crude fall below 90 as stockpiles swell"
 
     def test_follow_up_with_a_lookalike_headline_a_day_later_is_a_separate_story(self):
         first = figures(11, 12, 13, 14, 15, 16, 17, 18)

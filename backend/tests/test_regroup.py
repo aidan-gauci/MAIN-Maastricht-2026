@@ -36,8 +36,8 @@ REPORT = [
             "2026-11-16T08:03:00Z", "Invezz - Dutch"),
 ]
 
-ANALYSIS = "Zorbo crude analysis: will oil crash below 90 as supply glut grows"
-OUTLOOK = "Zorbo price outlook: will oil crash below 90 as supply glut grows"
+ANALYSIS = "Zorbo crude analysis: will crude fall below 90 as stockpiles swell"
+OUTLOOK = "Zorbo price outlook: will crude fall below 90 as stockpiles swell"
 FOLLOW_UPS = [
     article("mon", "en", ANALYSIS, "Oil prices rose 11 percent and 12 percent. Exports fell 13 percent, 14 percent and "
             "15 percent. Growth was 16 percent, 17 percent and 18 percent.", "2026-11-16T08:00:00Z"),

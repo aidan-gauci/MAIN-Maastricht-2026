@@ -17,9 +17,9 @@ class SpokenFramingTest(unittest.TestCase):
 
     def test_each_story_is_announced_by_its_headline_after_any_introduction(self):
         first = spoken_text(segment("a", f"{INTRO} Policy rate, 3.25 percent."), "Central bank holds rate", "en")
-        later = spoken_text(segment("b", "Saving rate, 7.1 percent."), "Is Huang coming back?", "en")
+        later = spoken_text(segment("b", "Saving rate, 7.1 percent."), "Is the chief coming back?", "en")
         self.assertEqual(first, f"{INTRO} Central bank holds rate. Policy rate, 3.25 percent.")
-        self.assertEqual(later, "Is Huang coming back? Saving rate, 7.1 percent.")
+        self.assertEqual(later, "Is the chief coming back? Saving rate, 7.1 percent.")
 
     def test_no_headline_or_non_english_output_keeps_the_text(self):
         text = "Leitzins, 3,25 Prozent."
