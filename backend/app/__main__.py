@@ -1,11 +1,14 @@
 import argparse
+import sys
 import json
 import logging
 import os
 from pathlib import Path
 
 from .config import CORPUS, DATA, DEMO, MODE
+from .grouping_eval import run_evaluation
 from .importer import read_articles
+from .regroup import regroup_corpus
 from .service import get_store, prepare_corpus, usage_report
 from .storage import Store
 
@@ -26,6 +29,19 @@ def main():
         help="In live mode, store heuristic clusters if provider extraction fails instead of keeping the previous corpus",
     )
     commands.add_parser("costs")
+    regroup = commands.add_parser(
+        "regroup", help="Re-cluster the imported corpus under the current grouping rules; no provider calls")
+    regroup.add_argument("path", type=Path, nargs="?", default=DEMO / "articles.jsonl",
+                         help="The feeds the corpus was imported from (article text is not stored)")
+    regroup.add_argument("--official", type=Path, help="The --official feed given to import, if any")
+    grouping = commands.add_parser(
+        "evaluate-grouping", help="Offline: score story grouping against the organizers' translation ground truth")
+    grouping.add_argument("path", type=Path, help="Organizer ZIP, directory of JSONL feeds, or one JSONL file")
+    grouping.add_argument("--embeddings", type=Path,
+                          help="JSON mapping article ID to a story vector, to include the cross-outlet merge")
+    grouping.add_argument("--probe", action="append", default=[], metavar="WORD",
+                          help="Report how many stories with WORD in an English headline sit in an event thread")
+    grouping.add_argument("--json", action="store_true", help="Print the full report as JSON")
     purge = commands.add_parser("purge-event")
     purge.add_argument("--confirm", action="store_true", required=True)
     reset = commands.add_parser("reset-demo", help="Delete generated fixture data; the next start or import rebuilds it")
@@ -48,6 +64,12 @@ def purge_corpus(corpus):
 
 
 def run(parser, args):
+    if args.command == "evaluate-grouping":
+        # Reads the feeds only: no store, no provider calls. Titles can hold characters a console lacks.
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(errors="replace")
+        print(run_evaluation(args.path, args.embeddings, as_json=args.json, probes=args.probe))
+        return
     store = get_store()
     if args.command == "purge-event":
         if CORPUS != "event":
@@ -59,9 +81,10 @@ def run(parser, args):
         purge_corpus("fixture")
         print(f"Reset fictional fixture data in {DATA}")
         return
-    if args.command == "import":
+    if args.command in {"import", "regroup"}:
         if (args.path.resolve() != (DEMO / "articles.jsonl").resolve() or args.official) and CORPUS != "event":
-            parser.error("Set BRIEFING_CORPUS=event to import material from outside the fixture")
+            parser.error(f"Set BRIEFING_CORPUS=event to {args.command} material from outside the fixture")
+    if args.command == "import":
         if args.limit is not None and args.limit < 1:
             parser.error("--limit requires a positive article count")
         if MODE == "live" and CORPUS == "event" and not (
@@ -81,6 +104,15 @@ def run(parser, args):
         print(json.dumps(summary))
     elif args.command == "costs":
         print(json.dumps(usage_report(store), indent=2))
+    elif args.command == "regroup":
+        # No provider is created here: facts, embeddings and usage already stored are all it needs.
+        articles = read_articles(args.path)
+        if args.official:
+            articles += read_articles(args.official, official=True)
+        summary = {**regroup_corpus(store, articles), "mode": MODE, "corpus": CORPUS}
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(errors="replace")
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

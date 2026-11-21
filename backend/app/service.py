@@ -15,6 +15,7 @@ from .pipeline import narrate, prepare, prepare_ranking
 from .providers import Providers
 from .storage import Store
 from .summaries import prepare_summaries, select_summaries
+from .threads import assign_threads
 
 STAGES = ("ingestion", "story_extraction", "script_generation", "speech_generation")
 # Average pace of a narrated briefing. Narration is built only from verified figures and never padded,
@@ -162,6 +163,7 @@ def prepare_corpus(store, articles, *, allow_fallback=True, report=None):
             for key in ("region", "country"):
                 if article.get(key):
                     source[key] = article[key]
+    assign_threads(stories)
     store.replace_corpus(articles, stories, prepare_summaries(stories), preparation_usage=usage)
     if report is not None:
         count = getattr(providers, "heuristic_fallback_articles", 0)

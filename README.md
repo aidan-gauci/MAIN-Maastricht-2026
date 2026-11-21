@@ -76,6 +76,21 @@ Use `--limit 20` for a sample and `--official PATH` to append public releases in
 
 Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load your own profile cards in place of the two fictional ones. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
 
+### Regrouping an imported corpus, and event threads
+
+Grouping decides which articles are one story. It matches translations (a German or Dutch article within minutes of its English original, by shared figures; short articles with few figures need the same outlet, five minutes and shared headline words), treats one outlet's lookalike headlines as separate pieces unless their text is the same, and, in live mode, merges two outlets' reports of one event by embedding, figures and time (digests never merge). A multi-day saga is not merged. Its stories form an **event thread** instead: stories within five days that name the same distinctive person, company or ticker in their English headlines and are about the same thing (embedding cosine 0.65 or more; without embeddings, four shared headline words). Common names, digests and names spread over months do not make threads. Each story keeps its own facts and gains `thread_id` and `thread_title` (visible in `/api/evidence`), and a briefing plays at most one story per thread.
+
+`regroup` applies the current grouping rules to an already imported corpus without any provider call, so a rule change does not repeat the paid extraction. Facts are tied to their article, so each new story takes the union of its members' stored facts. Conflict labels, thread markers, summaries and the story ID are recomputed, and unchanged stories are kept as they are. The article text is not stored, so point the command at the same files the corpus was imported from. It follows the same rules as `import` for the corpus, mode and data directory, and, like `import`, stop the server first. Everything is replaced in one transaction and any failure keeps the previous corpus. Briefing history stays, but feedback on a story whose members changed no longer matches its new ID. In live mode the stored story embeddings merge cross-outlet reports again; one vector is kept per story, so a story that was a merge keeps one vector for both halves if the new rules split it.
+
+```powershell
+$env:BRIEFING_CORPUS = "event"
+./.venv/Scripts/python.exe -m backend.app regroup "C:/path/event-data.zip"
+```
+
+It prints the stories before and after, how many were merged or split, the cross-outlet merges and the threads.
+
+`evaluate-grouping PATH [--embeddings vectors.json] [--probe WORD]` is an offline check that reads the feeds only. It scores translation matching against the organizers' pairs (the same author and outlet family within 15 minutes, taking the nearest English piece; a team byline counts when the figures match), and reports group sizes, multi-day groups, one outlet's repeated stories, cross-outlet merges (when given a JSON mapping of article ID to story vector) and event threads. `--probe Huang` shows how many stories with that word in an English headline sit in a thread. It lists headlines only.
+
 ## Shared recommendations and summaries
 
 The listener's topic weights form an interest vector. The app ranks eligible stories against that vector, applies topic exclusions, and uses the same weights to choose a prepared angle for each selected story. Language and expertise select a version of that angle.

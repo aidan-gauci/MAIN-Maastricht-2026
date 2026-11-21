@@ -757,16 +757,23 @@ DIVERSITY_SIMILARITY = 0.80
 
 
 def diversify(stories: list[dict[str, Any]], threshold: float = DIVERSITY_SIMILARITY) -> list[dict[str, Any]]:
-    """Keep ranking order but pass over a story that is a near-twin of one already chosen.
+    """Keep ranking order but pass over a near-twin of a story already chosen, and over a further story
+    of an event thread already represented (one development of an event per briefing).
 
-    Stories without embeddings (offline mode) are never passed over.
+    Stories without embeddings (offline mode) are never passed over as near-twins.
     """
     kept: list[dict[str, Any]] = []
+    threads: set[str] = set()
     for story in stories:
+        thread = story.get("thread_id")
+        if thread and thread in threads:
+            continue
         vector = story.get("embedding")
         if vector and any(cosine(vector, other["embedding"]) >= threshold for other in kept if other.get("embedding")):
             continue
         kept.append(story)
+        if thread:
+            threads.add(thread)
     return kept
 
 
