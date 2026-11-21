@@ -1,14 +1,46 @@
 import json
+import re
 import unittest
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from backend.app.__main__ import compare
 from backend.app.config import DEMO, Wildcard, load_profiles
 from backend.app.importer import read_articles
 from backend.app.service import generate_briefing, list_topics, prepare_corpus, wildcard_profile
 from backend.app.storage import Store
+
+
+def compare(stories, key):
+    """Check the fictional fixture's grouping and figures against its own expected key (tests only)."""
+    def number(value):
+        text = re.sub(r"\s*(?:%|percent|prozent|procent)$", "", str(value).strip(" ,.;"), flags=re.I)
+        if re.fullmatch(r"[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?", text):
+            text = text.replace(",", "")
+        elif "," in text and "." not in text:
+            text = text.replace(",", ".")
+        try:
+            return str(Decimal(text).normalize())
+        except InvalidOperation:
+            return str(value)
+
+    by_article = {article["article_id"]: story for story in stories for article in story["articles"]}
+    results = []
+    for expected in key["stories"]:
+        members = set(expected["article_ids"])
+        actual_ids = {by_article[article]["id"] for article in members if article in by_article}
+        present = members <= by_article.keys()
+        actual = by_article[next(iter(members))] if members and present and len(actual_ids) == 1 else None
+        observed = {number(fact["value"]) for fact in actual["facts"]} if actual else set()
+        values = {number(value) for value in expected.get("values", [])}
+        results.append({
+            "label": expected["label"],
+            "grouped": bool(actual),
+            "extra_members": sorted({row["article_id"] for row in actual["articles"]} - members) if actual else [],
+            "missing_values": sorted(values - observed),
+        })
+    return results
 
 
 class BriefingTest(unittest.TestCase):

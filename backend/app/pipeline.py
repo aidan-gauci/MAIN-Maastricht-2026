@@ -1533,15 +1533,3 @@ def spoken_text(segment: dict[str, Any], headline: str, language: str) -> str:
     if headline[-1] not in ".?!":
         headline += "."
     return " ".join(part for part in (introduction, headline, body) if part)
-
-
-def evaluate(stories: list[dict[str, Any]], answer_key: dict[str, Any]) -> dict[str, Any]:
-    """Compact fixture/data-quality evaluation against expected values."""
-    all_facts = [f for story in stories for f in story.get("facts", [])]
-    expected = answer_key.get("facts", answer_key) if isinstance(answer_key, dict) else {}
-    errors = []
-    for key, value in expected.items():
-        matches = [f for f in all_facts if f.get("id") == key or f.get("evidence") == key]
-        if not matches or all(str(value) not in str(f.get("value", "")) for f in matches):
-            errors.append({"expected": key, "value": value, "found": [f.get("value") for f in matches]})
-    return {"story_count":len(stories), "fact_count":len(all_facts), "conflict_count":sum(f.get("conflict_status")=="conflict" for f in all_facts), "checks":len(expected), "errors":errors, "passed":not errors}

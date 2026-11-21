@@ -2,8 +2,6 @@ import argparse
 import json
 import logging
 import os
-import re
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .config import CORPUS, DATA, DEMO, MODE
@@ -13,36 +11,6 @@ from .storage import Store
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-
-
-def compare(stories, key):
-    def number(value):
-        text = re.sub(r"\s*(?:%|percent|prozent|procent)$", "", str(value).strip(" ,.;"), flags=re.I)
-        if re.fullmatch(r"[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?", text):
-            text = text.replace(",", "")
-        elif "," in text and "." not in text:
-            text = text.replace(",", ".")
-        try:
-            return str(Decimal(text).normalize())
-        except InvalidOperation:
-            return str(value)
-
-    by_article = {article["article_id"]: story for story in stories for article in story["articles"]}
-    results = []
-    for expected in key["stories"]:
-        members = set(expected["article_ids"])
-        actual_ids = {by_article[article]["id"] for article in members if article in by_article}
-        present = members <= by_article.keys()
-        actual = by_article[next(iter(members))] if members and present and len(actual_ids) == 1 else None
-        observed = {number(fact["value"]) for fact in actual["facts"]} if actual else set()
-        values = {number(value) for value in expected.get("values", [])}
-        results.append({
-            "label": expected["label"],
-            "grouped": bool(actual),
-            "extra_members": sorted({row["article_id"] for row in actual["articles"]} - members) if actual else [],
-            "missing_values": sorted(values - observed),
-        })
-    return results
 
 
 def main():
@@ -57,8 +25,6 @@ def main():
         "--allow-offline-fallback", action="store_true",
         help="In live mode, store heuristic clusters if provider extraction fails instead of keeping the previous corpus",
     )
-    evaluation = commands.add_parser("evaluate")
-    evaluation.add_argument("answer_key", type=Path)
     commands.add_parser("costs")
     purge = commands.add_parser("purge-event")
     purge.add_argument("--confirm", action="store_true", required=True)
@@ -113,11 +79,6 @@ def run(parser, args):
         if MODE == "live":
             summary["heuristic_fallback_articles"] = report.get("heuristic_fallback_articles", 0)
         print(json.dumps(summary))
-    elif args.command == "evaluate":
-        report = compare(store.stories(), json.loads(args.answer_key.read_text(encoding="utf-8-sig")))
-        print(json.dumps(report, indent=2))
-        if any(not row["grouped"] or row["extra_members"] or row["missing_values"] for row in report):
-            raise SystemExit(1)
     elif args.command == "costs":
         print(json.dumps(usage_report(store), indent=2))
 

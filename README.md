@@ -30,12 +30,11 @@ The backend does not read `.env` files. Set variables in each PowerShell termina
 
 Run these from the repository root in PowerShell. Stop the backend before reset, import, or cleanup.
 
-1. **Preflight.** Run the tests, then check the fixture clusters:
+1. **Preflight.** Run the tests, then import the fixture:
 
    ```powershell
    ./.venv/Scripts/python.exe -m unittest discover -s backend/tests
    ./.venv/Scripts/python.exe -m backend.app import
-   ./.venv/Scripts/python.exe -m backend.app evaluate backend/demo/answer-key.json
    ```
 
 2. **Reset the fictional demo.** This deletes generated fixture briefings, audio, and usage for both modes. The next start or `import` rebuilds them. You can run it repeatedly.
@@ -73,9 +72,9 @@ $env:BRIEFING_CORPUS = "event"
 ./.venv/Scripts/python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Use `--limit 20` for a sample and `--official PATH` to append public releases in the normalized JSONL format. See `backend/demo/articles.jsonl` for that format. Event preparation without providers is a heuristic baseline. Review its clusters and evidence before using it in a live demo. The evaluation command accepts `{"stories":[{"label":"Example","article_ids":["id-1","id-2"],"values":[3.5]}]}` and reports split clusters, extra articles, and missing numeric values. Convert the organizer key to that shape and run `python -m backend.app evaluate PATH` separately from preparation.
+Use `--limit 20` for a sample and `--official PATH` to append public releases in the normalized JSONL format. See `backend/demo/articles.jsonl` for that format. Event preparation without providers is a heuristic baseline. Review its clusters and evidence before using it in a live demo. No organizer answer key was provided, so grouping quality is judged by reading the clusters and spot-checking facts against their source articles.
 
-Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load the four official profile cards when they arrive. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
+Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load your own profile cards in place of the two fictional ones. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
 
 ## Shared recommendations and summaries
 
@@ -131,7 +130,7 @@ The prototype ranker supports scheduled relevance, explicit regions, and seven-d
 
 Generate two distinct profiles, audit three spoken claims against their source articles, generate a wildcard live, and open the evidence and cost views. For the presentation, show the full corpus measurement and 10x estimate. Pitch a newsroom publisher as the buyer and show how editorial review fits between batch preparation and audio delivery.
 
-Run the fixture checks with `./.venv/Scripts/python.exe -m unittest discover -s backend/tests`. To inspect just the expected fixture clusters and values, import the fictional corpus first, then run `./.venv/Scripts/python.exe -m backend.app evaluate backend/demo/answer-key.json`.
+Run the fixture checks with `./.venv/Scripts/python.exe -m unittest discover -s backend/tests`. The fictional fixture's expected clusters and values live in `backend/demo/answer-key.json` and are checked by the test suite.
 
 After the event, stop the backend and purge the event data:
 
