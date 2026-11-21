@@ -8,7 +8,7 @@ import logoForDark from './assets/brand/maze-logo-for-dark-mode.svg';
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
 type Source = { article_id: string; title: string; source: string; url: string };
 type Story = { id: string; title: string; reason: string; title_language?: string };
-type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
+type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean; refresher_text?: string; refresher_fact_ids?: string[] };
 type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
 type VoicePreset = { id: string; label: string; description?: string; preview?: boolean; languages?: string[] | null };
 // Every voice speaks every output language; ElevenLabs has verified only some, and elsewhere the accent may vary.
@@ -629,6 +629,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
             <div className="story-feedback" aria-label={`Rate ${story.title}`}><span>Was this useful?</span><button type="button" className={ratings[story.id] === 'up' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'up')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} useful`} aria-pressed={ratings[story.id] === 'up'}><ThumbsUp size={14}/> Helpful</button><button type="button" className={ratings[story.id] === 'down' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'down')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} not useful`} aria-pressed={ratings[story.id] === 'down'}><ThumbsDown size={14}/> Not useful</button></div>
             <div className="transcript">
               {segments.map(segment => <div className="transcript-segment" key={segment.id}>
+                {segment.refresher_text && <p className="transcript-refresher">{segment.refresher_text}</p>}
                 <p>{segment.text}{segment.conflict && <span className="conflict-flag"><Info size={12}/> Conflicting reports</span>}</p>
                 {available && <div className="segment-actions">
                   <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>

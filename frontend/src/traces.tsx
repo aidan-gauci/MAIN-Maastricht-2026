@@ -17,7 +17,7 @@ import { ChevronDown, CircleCheck, Link2, LoaderCircle, RotateCw, ShieldCheck, T
 export type TraceSource = { article_id: string; title: string; source: string; url: string; language?: string };
 export type TraceFact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string; language?: string; conflict_group?: string; conflict_label?: string };
 export type TraceEvidence = { id: string; title: string; articles: TraceSource[]; facts: TraceFact[]; conflicts?: { id: string; label: string; fact_ids: string[] }[] };
-export type TraceSegmentInput = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: TraceSource[]; conflict: boolean };
+export type TraceSegmentInput = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: TraceSource[]; conflict: boolean; refresher_text?: string; refresher_fact_ids?: string[] };
 export type TraceBriefing = { id: string; stories: { id: string; title: string }[]; segments: TraceSegmentInput[] };
 export type TraceFocus = { segmentId: string; nonce: number };
 
@@ -26,6 +26,7 @@ type Link = { fact: TraceFact; article?: TraceSource };
 type Claim = {
   id: string; value: string; spoken: string[]; links: Link[]; sources: TraceSource[];
   languages: string[]; status: Status; conflictId?: string; conflictLabel?: string; order: number;
+  earlier: boolean; // a figure the listener heard before, recalled for context rather than reported as news
 };
 type Block = { id: string; claims: Claim[]; conflict?: { label: string; values: string[]; sources: TraceSource[] } };
 type SegmentTrace = {
@@ -70,15 +71,18 @@ function buildTraces(briefing: TraceBriefing, evidence: TraceEvidence[]) {
       ?? briefing.stories.find(item => evidence.find(entry => entry.id === item.id)?.facts.some(fact => segment.fact_ids.includes(fact.id)));
     const ids = [...new Set(segment.fact_ids)];
     const resolved = ids.flatMap(id => facts.get(id) ?? []);
-    const sentences = sentencesOf(segment.text);
+    // A recalled figure is spoken ahead of the story, so its sentence comes first.
+    const sentences = sentencesOf([segment.refresher_text, segment.text].filter(Boolean).join(' '));
     const sentenceNumbers = sentences.map(sentence => new Set((sentence.match(NUMBER) ?? []).map(canonicalNumber)));
 
     // One claim per distinct figure. A second fact with the same value from the same article
     // starts a new claim, because two different measures can share a number.
+    // A figure recalled from an earlier briefing is its own claim, never merged with a new figure of the same value.
+    const recalled = new Set(segment.refresher_fact_ids ?? []);
     const grouped = new Map<string, { number: string | null; links: Link[] }>();
     for (const fact of resolved) {
       const number = canonicalNumber(fact.value);
-      const base = number ?? `fact:${fact.id}`;
+      const base = (recalled.has(fact.id) ? 'earlier:' : '') + (number ?? `fact:${fact.id}`);
       let key = base;
       for (let copy = 2; grouped.get(key)?.links.some(link => link.fact.article_id === fact.article_id); copy++) key = `${base}#${copy}`;
       const group = grouped.get(key) ?? { number, links: [] };
@@ -95,7 +99,7 @@ function buildTraces(briefing: TraceBriefing, evidence: TraceEvidence[]) {
       const status: Status = conflicted ? 'conflict' : sources.length === 0 ? 'untraced' : sources.length > 1 ? 'corroborated' : 'single';
       return {
         id: `${segment.id}:${key}`, value: display(group.links[0].fact), spoken: [...new Set(matches.map(match => match.sentence))],
-        links: group.links, sources, languages, status,
+        links: group.links, sources, languages, status, earlier: group.links.every(link => recalled.has(link.fact.id)),
         conflictId: conflicted ? conflicted.fact.conflict_group ?? known?.id ?? `conflict:${key}` : undefined,
         conflictLabel: conflicted ? conflicted.fact.conflict_label ?? known?.label ?? 'Conflicting values reported for the same measure' : undefined,
         order: matches.length ? matches[0].at : sentences.length + position,
@@ -161,12 +165,13 @@ function StatusChip({ claim }: { claim: Claim }) {
 
 function ClaimRow({ claim, block }: { claim: Claim; block: Block }) {
   const others = block.conflict ? block.claims.filter(item => item !== claim).map(item => item.value) : [];
-  const note = claim.status === 'corroborated' ? `Same figure in ${claim.languages.map(languageName).join(', ')}`
+  const note = claim.earlier ? 'Heard in an earlier briefing and recalled here for context.'
+    : claim.status === 'corroborated' ? `Same figure in ${claim.languages.map(languageName).join(', ')}`
     : claim.status === 'single' ? 'Only one article reports this figure.'
     : claim.status === 'conflict' && others.length ? `Differs from ${others.join(', ')}` : '';
   return <li className={`trace-claim ${claim.status}`}>
     <div className="trace-node trace-spoken">
-      <span className="trace-kicker">Spoken claim</span>
+      <span className="trace-kicker">{claim.earlier ? 'Earlier figure' : 'Spoken claim'}</span>
       {claim.spoken.length > 0 ? claim.spoken.map(sentence => <p className="trace-quote" key={sentence}>“{sentence}”</p>)
         : <p className="trace-quote unquoted">Cited figure {claim.value}<span>Not quoted word for word in the narration.</span></p>}
       <StatusChip claim={claim}/>
