@@ -42,6 +42,25 @@ def feeds(path):
             yield path.name, stream
 
 
+def read_authors(path: Path) -> dict[str, str]:
+    """Article ID -> author for organizer feeds, which the normalized import does not keep.
+
+    The raw feeds put the author in ``source``; other formats have no author and are skipped.
+    """
+    authors = {}
+    for _, stream in feeds(path):
+        for line in stream:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and "$id" in row and isinstance(row.get("source"), str) and row["source"].strip():
+                authors[str(row["$id"])] = row["source"].strip()
+    return authors
+
+
 def read_articles(path: Path, *, official=False, limit=None):
     items = []
     for name, stream in feeds(path):
