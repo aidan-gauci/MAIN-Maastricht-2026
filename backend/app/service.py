@@ -227,9 +227,11 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
     if spoken_fact_ids:
         # Remembered facts change what can be said, so narrate this listener's own script. A remembered figure is
         # never replayed as news; where it gives context to an update of the same measure it is recalled briefly.
+        # Narration is deterministic (no model rearranges it): listeners in the same state get identical text, so
+        # their story clips are rendered once and shared, and no per-listener model call is made.
         first_heard = store.first_spoken_times(listener_id, spoken_fact_ids) if listener_id else {}
         heard = pipeline.heard_figures(ranking, spoken_fact_ids, first_heard)
-        segments = narrate(selected, profile, Providers(MODE, store.record_usage, voice_preset), heard)
+        segments = narrate(selected, profile, None, heard)
     else:
         segments = select_summaries(selected, profile, summaries)
     segments = pipeline.introduce_once(segments)
