@@ -208,6 +208,11 @@ def load_profiles():
 
 
 def supported_languages():
-    if MODE == "live" and os.environ.get("BRIEFING_MULTILINGUAL") == "1":
-        return ["en", "de", "nl"]
-    return ["en"]
+    """Output languages the app offers: English, German and Dutch, in demo and live mode alike.
+
+    Demo mode speaks them with an offline voice per language. BRIEFING_MULTILINGUAL=0 turns German and
+    Dutch off. It is read on every call, so the setting follows the environment.
+    """
+    if os.environ.get("BRIEFING_MULTILINGUAL", "").strip().lower() in {"0", "false", "no", "off"}:
+        return ["en"]
+    return ["en", "de", "nl"]

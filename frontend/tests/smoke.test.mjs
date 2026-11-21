@@ -258,5 +258,19 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   const customMeta = page.locator('.briefing-meta .briefing-for');
   await customMeta.getByText(custom.profile_name, { exact: true }).waitFor();
   await customMeta.getByText('English', { exact: true }).waitFor();
+
+  // German and Dutch are offered by name in their own language, and the briefing follows the choice.
+  const outputLanguage = page.getByLabel('Output language');
+  assert.deepEqual(await outputLanguage.locator('option').allInnerTexts(), ['English', 'Deutsch', 'Nederlands']);
+  await outputLanguage.selectOption('de');
+  const [germanResponse] = await Promise.all([postResponse(page, '/api/briefings'), create.click()]);
+  assert.equal(germanResponse.status(), 201);
+  const germanRequest = germanResponse.request().postDataJSON();
+  assert.deepEqual([germanRequest.language, germanRequest.wildcard.language], ['de', 'de']);
+  const german = await germanResponse.json();
+  assert.equal(german.language, 'de');
+  assert.equal(german.audio_status, 'ready');
+  assert.match(german.segments[0].text, /^(?:Einfach gesagt steht Folgendes in den Quellen\.|Das berichten die Quellen\.|Das sind die berichteten Kennzahlen\.)/);
+  await customMeta.getByText('Deutsch', { exact: true }).waitFor();
   assert.deepEqual(pageErrors, []);
 });

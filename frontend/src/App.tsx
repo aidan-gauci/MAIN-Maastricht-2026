@@ -7,7 +7,7 @@ import logoForDark from './assets/brand/maze-logo-for-dark-mode.svg';
 
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
 type Source = { article_id: string; title: string; source: string; url: string };
-type Story = { id: string; title: string; reason: string };
+type Story = { id: string; title: string; reason: string; title_language?: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
 type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
 type VoicePreset = { id: string; label: string; description?: string; preview?: boolean };
@@ -42,7 +42,12 @@ const errorMessage = (error: unknown) => {
   return error instanceof Error && error.message ? error.message : 'An unexpected error occurred. Please try again.';
 };
 const MAX_TOPICS = 12;
-const languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
+// Each language is named in itself ("Deutsch", "Nederlands"), so a listener finds theirs whatever the page is written in.
+const nativeLanguageNames: Record<string, string> = { en: 'English', de: 'Deutsch', nl: 'Nederlands' };
+const languageLabel = (code: string) => {
+  if (nativeLanguageNames[code]) return nativeLanguageNames[code];
+  try { return new Intl.DisplayNames([code], { type: 'language' }).of(code) ?? code.toUpperCase(); } catch { return code.toUpperCase(); }
+};
 const money = (n: number | null) => n === null ? 'Unavailable' : `$${n.toFixed(4)}`;
 const newListenerId = () => {
   const key = 'briefing-listener-id';
@@ -423,7 +428,7 @@ export default function App() {
                 {activeProfile.description && <p className="profile-description">{activeProfile.description}</p>}
                 <div className="settings-row">
                   {activeProfile.duration && <span><Clock3 size={15}/>About {activeProfile.duration} minutes</span>}
-                  {activeProfile.language && <span><AudioLines size={15}/>{languageNames.of(activeProfile.language)}</span>}
+                  {(language || activeProfile.language) && <span><AudioLines size={15}/>{languageLabel(language || activeProfile.language || 'en')}</span>}
                   {activeProfile.expertise && <span><Gauge size={15}/>{activeProfile.expertise}</span>}
                 </div>
               </>}
@@ -453,7 +458,7 @@ export default function App() {
             </div>}
           <div className="delivery-settings">
             <div className="delivery-heading"><h3>Delivery</h3><p>Choose how your briefing should be delivered.</p></div>
-            <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageNames.of(value) ?? value.toUpperCase()}</option>)}</select></label>
+            <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageLabel(value)}</option>)}</select></label>
             {regions.length > 1 && <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>}
             {voicePresets.length > 1 && <div className="voice-field">
               <label>Voice<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} aria-describedby="voice-style-note" onChange={e => { stopVoiceSample(); updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value })); }}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.description ? `${preset.label} (${preset.description})` : preset.label}</option>)}</select></label>
@@ -565,7 +570,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
   return <div className="briefing-view">
     <div className="briefing-meta">
       <span className="status-chip"><span className={ready ? 'live-dot' : 'status-dot'}/>{ready ? 'Ready to listen' : 'Transcript ready'}</span>
-      <span className="briefing-for"><strong>{briefing.profile_name}</strong><span className="lang-tag">{languageNames.of(briefing.language)}</span></span>
+      <span className="briefing-for"><strong>{briefing.profile_name}</strong><span className="lang-tag">{languageLabel(briefing.language)}</span></span>
     </div>
     <div className="briefing-title-row">
       <h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>Today, in context.</h2>

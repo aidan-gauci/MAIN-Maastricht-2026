@@ -194,6 +194,19 @@ def recommendation_topics(store):
     return store.recommendation_snapshot(_build_recommendations)[2]
 
 
+def _briefing_story(story, language):
+    """Story entry of a briefing. German and Dutch briefings head it with that language's edition of the title.
+
+    ``title_language`` is set only when the title really is in the listener's language, so the voice reads
+    the headline only then. Without such an edition the story title stays as the transcript heading.
+    """
+    title, title_language = pipeline.localized_headline(story, language)
+    entry = {"id": story["id"], "title": title, "reason": story["reason"]}
+    if title_language:
+        entry["title_language"] = title_language
+    return entry
+
+
 def generate_briefing(store, profile, *, listener_id=None, region="all", voice_preset="default",
                       spoken_fact_ids=None, feedback_events=None, briefing_id=None,
                       available_at=None, persist=True, scheduled=False, expressiveness="balanced"):
@@ -231,7 +244,7 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
         voice_preset=voice_preset,
         expressiveness=expressiveness,
         stories=[
-            {key: story[key] for key in ("id", "title", "reason")}
+            _briefing_story(story, profile["language"])
             for story in selected if any(fact["id"] in used for fact in story["facts"])
         ],
         segments=segments,
