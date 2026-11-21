@@ -17,7 +17,7 @@ import { ChevronDown, CircleCheck, Link2, LoaderCircle, RotateCw, ShieldCheck, T
 export type TraceSource = { article_id: string; title: string; source: string; url: string; language?: string };
 export type TraceFact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string; language?: string; conflict_group?: string; conflict_label?: string };
 export type TraceEvidence = { id: string; title: string; articles: TraceSource[]; facts: TraceFact[]; conflicts?: { id: string; label: string; fact_ids: string[] }[] };
-export type TraceSegmentInput = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: TraceSource[]; conflict: boolean; refresher_fact_ids?: string[] };
+export type TraceSegmentInput = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: TraceSource[]; conflict: boolean; refresher_text?: string; refresher_fact_ids?: string[] };
 export type TraceBriefing = { id: string; stories: { id: string; title: string }[]; segments: TraceSegmentInput[] };
 export type TraceFocus = { segmentId: string; nonce: number };
 
@@ -71,7 +71,8 @@ function buildTraces(briefing: TraceBriefing, evidence: TraceEvidence[]) {
       ?? briefing.stories.find(item => evidence.find(entry => entry.id === item.id)?.facts.some(fact => segment.fact_ids.includes(fact.id)));
     const ids = [...new Set(segment.fact_ids)];
     const resolved = ids.flatMap(id => facts.get(id) ?? []);
-    const sentences = sentencesOf(segment.text);
+    // A recalled figure is spoken ahead of the story, so its sentence comes first.
+    const sentences = sentencesOf([segment.refresher_text, segment.text].filter(Boolean).join(' '));
     const sentenceNumbers = sentences.map(sentence => new Set((sentence.match(NUMBER) ?? []).map(canonicalNumber)));
 
     // One claim per distinct figure. A second fact with the same value from the same article

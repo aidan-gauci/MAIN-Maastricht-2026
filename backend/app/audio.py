@@ -171,16 +171,21 @@ def create_audio(briefing, store, providers, mode):
         raise ValueError("A briefing needs at least one audio segment")
     # The voice announces each story by its headline; the transcript already shows it as a heading.
     # A German or Dutch briefing announces only a title that is in its own language.
-    from .pipeline import spoken_text
+    from .pipeline import spoken_text, story_segment
     stories = {"segment-" + str(story.get("id")): story for story in briefing.get("stories", [])}
-    segments = []
+    # The clips in playing order, each with the text it speaks. A story's clip is keyed on the story as it reads
+    # without any refresher, so it is shared by every listener whose story reads the same. A refresher is its own
+    # small clip, spoken ahead of its story's clip in the same voice, style and language, and shared by text.
+    parts = []
     for segment in briefing["segments"]:
         story = stories.get(segment.get("id"), {})
-        segments.append(dict(segment, text=spoken_text(
+        if refresher := str(segment.get("refresher_text") or "").strip():
+            parts.append((refresher, _audio_key(("refresher-v1", mode, voice, language, refresher))))
+        shared = dict(story_segment(segment), text=spoken_text(
             segment, story.get("title", ""), language, story.get("title_language"),
-        )))
-    clip_keys = [_audio_key(("segment-v1", mode, voice, language, segment)) for segment in segments]
-    clips = [store.audio_dir / f"{key}.{extension}" for key in clip_keys]
+        ))
+        parts.append((shared["text"], _audio_key(("segment-v1", mode, voice, language, shared))))
+    clips = [store.audio_dir / f"{key}.{extension}" for _, key in parts]
     if len(clips) == 1:
         target = clips[0]
     else:
@@ -197,18 +202,18 @@ def create_audio(briefing, store, providers, mode):
         if not ffmpeg:
             raise RuntimeError("Install FFmpeg to assemble live audio")
 
-    for segment, clip in zip(segments, clips):
+    for (text, _), clip in zip(parts, clips):
         def synthesize(output):
             if mode == "live":
-                providers.synthesize(segment["text"], output, language)
+                providers.synthesize(text, output, language)
             elif language == "en":
-                offline_voice(segment["text"], output)
+                offline_voice(text, output)
             else:
                 # Other languages get a voice for their own language.
-                offline_voice(segment["text"], output, language)
+                offline_voice(text, output, language)
 
         if _publish_audio(clip, synthesize) and mode == "demo":
-            store.record_usage("speech_generation", mode=mode, characters=len(segment["text"]), estimated_usd=0)
+            store.record_usage("speech_generation", mode=mode, characters=len(text), estimated_usd=0)
     if len(clips) > 1:
         _publish_audio(target, lambda output: _assemble_audio(clips, output, ffmpeg))
     return url

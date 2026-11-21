@@ -236,7 +236,7 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
     if not segments:
         raise ValueError("No narration passed the evidence checks")
     used = {fact for segment in segments for fact in segment["fact_ids"]}
-    spoken_words = sum(len(str(segment["text"]).split()) for segment in segments)
+    spoken_words = sum(len(f"{segment.get('refresher_text', '')} {segment['text']}".split()) for segment in segments)
     briefing = dict(
         id=briefing_id or uuid4().hex,
         listener_id=listener_id,

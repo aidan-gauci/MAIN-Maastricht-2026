@@ -1055,10 +1055,7 @@ def _script_is_valid(
     candidate: str,
     facts: list[dict[str, Any]],
     approved: list[str],
-    together: tuple[str, str] | None = None,
 ) -> bool:
-    """The introduction first, then exactly the approved sentences. ``together`` is a pair of approved
-    sentences that must stay next to each other, in that order (a recalled figure and the figure it precedes)."""
     text = str(candidate or "").strip()
     without_units = re.sub(_UNIT_PATTERN, " ", text, flags=re.I)
     if not text or re.search(r"\b(?:fact|story)-[a-z0-9-]+\b", text, re.I) or _SPELLED_NUMBERS.search(without_units):
@@ -1067,12 +1064,7 @@ def _script_is_valid(
     sentences = _script_sentences(text)
     if any(_sentence_hash(sentence) in source_hashes for sentence in sentences):
         return False
-    if not (sentences[0] == approved[0] and Counter(sentences[1:]) == Counter(approved[1:])):
-        return False
-    if together is None:
-        return True
-    first = sentences.index(together[0])
-    return sentences[first + 1:first + 2] == [together[1]]
+    return sentences[0] == approved[0] and Counter(sentences[1:]) == Counter(approved[1:])
 
 
 _MEASURE_LABELS = (
@@ -1450,11 +1442,13 @@ _NARRATION_FRAMES = {
     "nl": {"beginner": "Eenvoudig gezegd melden de bronnen het volgende.", "intermediate": "Dit melden de bronnen.", "advanced": "Dit zijn de gerapporteerde cijfers."},
 }
 
-# A figure heard within the memory window is never replayed as news. It may be recalled in one short sentence,
-# placed directly before the new figure for the same measure, as context for what changed. "stood at" agrees
-# with singular and plural labels alike ("revenue", "workers"); German and Dutch keep the telegraphic
-# "Label, amount." form of their claims, which needs no inflection.
-_REFRESHERS = {"en": "Last time, {label} stood at {amount}.", "de": "Zuletzt: {label}, {amount}.", "nl": "Vorige keer: {label}, {amount}."}
+# A figure heard within the memory window is never replayed as news. It may be recalled in one short sentence
+# ("refresher") as context for a new figure of the same measure. The sentence is not part of the story's text:
+# it is carried beside it and spoken as its own small audio clip ahead of the story's clip, so the story's
+# clip is shared with every listener whose story reads the same. "stood at" agrees with singular and plural
+# labels alike ("revenue", "workers"); German and Dutch keep the telegraphic "Label, amount." form of their
+# claims, which needs no inflection.
+_REFRESHERS ={"en": "Last time, {label} stood at {amount}.", "de": "Zuletzt: {label}, {amount}.", "nl": "Vorige keer: {label}, {amount}."}
 
 
 def heard_figures(stories: list[dict[str, Any]], spoken_fact_ids: Iterable[str] | None,
@@ -1520,6 +1514,7 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
     """Emphasize the listener's interests while retaining the verified claims.
 
     ``heard`` (see ``heard_figures``) lets a story recall, at most once, a figure the listener heard before.
+    The recall is one sentence in ``refresher_text``; the story's ``text`` is the same with or without it.
     """
     result = []
     duration = max(1, int(profile.get("duration", 5) or 5))
@@ -1601,17 +1596,17 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
             approved = [approved[0]] + [approved[index + 1] for index in order]
         else:
             order = list(range(len(claim_facts)))
-        # A heard figure for the same measure is recalled, at most once per story, right before the first new
-        # claim it gives context to. It is cited with its own article, and marked so views can tell it apart.
-        recalled, together = None, None
-        for position, index in enumerate(order if heard else ()):
+        # A heard figure for the same measure is recalled, at most once per story, for the first new claim (in
+        # spoken order) it gives context to. The story's own text stays exactly what it is without the recall.
+        # The recalled fact and its article are cited, and the segment says so (see story_segment).
+        recalled, added_sources = None, []
+        for index in (order if heard else ()):
             recalled = _refresher(story, chosen[index], heard, output_language)
             if recalled:
-                approved.insert(1 + position, recalled["sentence"])
-                together = (recalled["sentence"], approved[2 + position])
                 ids.append(str(recalled["fact"]["id"]))
                 if str(recalled["article"].get("article_id")) not in cited_ids:
                     sources.append(recalled["article"])
+                    added_sources.append(str(recalled["article"].get("article_id")))
                 break
         text = " ".join(approved)
         conflict_text = {"en": "The reports give conflicting values.", "de": "Die Berichte nennen unterschiedliche Werte.", "nl": "De berichten noemen verschillende waarden."}.get(output_language, "The reports give conflicting values.")
@@ -1623,17 +1618,17 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
                 f"Arrange these verified narration sentences in language {output_language} as one paragraph. "
                 "Keep the introduction first and include every remaining sentence exactly once with its wording "
                 "unchanged. Add nothing. "
-                + ("Keep the sentence that recalls an earlier figure directly before the sentence that follows it. " if recalled else "")
-                + f"Listener expertise: {expertise}. Listener style: {style}.\n{sentences}"
+                f"Listener expertise: {expertise}. Listener style: {style}.\n{sentences}"
             )
             candidate = providers.generate_script(prompt, output_language)
-            if _script_is_valid(candidate, facts, approved, together):
+            if _script_is_valid(candidate, facts, approved):
                 text = " ".join(_script_sentences(candidate))
         if conflicted and conflict_text.lower() not in text.lower():
             text += " " + conflict_text
         segment = {"id": "segment-" + story["id"], "text": text, "fact_ids": ids, "sources": sources, "conflict": conflicted, "conflict_labels": list(dict.fromkeys(f.get("conflict_label") for f in spoken if f.get("conflict_label")))}
         if recalled:
-            segment["refresher_fact_ids"] = [str(recalled["fact"]["id"])]
+            segment.update(refresher_text=recalled["sentence"], refresher_fact_ids=[str(recalled["fact"]["id"])],
+                           refresher_source_ids=added_sources)
         result.append(segment)
         if len(result) >= duration:
             break
@@ -1654,6 +1649,22 @@ def introduce_once(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """A briefing says its introduction once, at the start, rather than before every story."""
     return [segment if index == 0 else {**segment, "text": _split_introduction(segment["text"])[1]}
             for index, segment in enumerate(segments)]
+
+
+def story_segment(segment: dict[str, Any]) -> dict[str, Any]:
+    """The segment as it reads without its refresher: the story's own text, facts and sources.
+
+    A refresher is carried beside the story (``refresher_text``, ``refresher_fact_ids``, ``refresher_source_ids``
+    for sources cited only because of it) and has its own audio clip. The story's clip is keyed on this, so
+    listeners whose story reads the same share one clip whether or not they also hear a refresher.
+    """
+    if not segment.get("refresher_text"):
+        return segment
+    recalled, added = set(segment.get("refresher_fact_ids") or ()), set(segment.get("refresher_source_ids") or ())
+    story = {key: value for key, value in segment.items() if not key.startswith("refresher_")}
+    story["fact_ids"] = [fact_id for fact_id in segment.get("fact_ids", []) if fact_id not in recalled]
+    story["sources"] = [source for source in segment.get("sources", []) if str(source.get("article_id")) not in added]
+    return story
 
 
 def localized_headline(story: dict[str, Any], language: str) -> tuple[str, str | None]:
