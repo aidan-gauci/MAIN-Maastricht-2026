@@ -338,13 +338,14 @@ class RefresherBriefingTest(unittest.TestCase):
 
 def speak(text, path, language="en"):
     """A stand-in voice whose samples tell which text it spoke."""
-    frames = b"\x01\x00" * 8 if text.startswith(("Last time", "Zuletzt", "Vorige")) else b"\x02\x00" * 16
+    frames = (b"\x01\x00" * 8 if text.startswith(("Last time", "Zuletzt", "Vorige"))
+              else b"\x03\x00" * 4 if text.endswith(tuple(pipeline._INTRODUCTIONS)) else b"\x02\x00" * 16)
     with wave.open(str(path), "wb") as audio:
         audio.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
         audio.writeframes(frames)
 
 
-REFRESHER_SAMPLES, STORY_SAMPLES = b"\x01\x00" * 8, b"\x02\x00" * 16
+REFRESHER_SAMPLES, STORY_SAMPLES, INTRO_SAMPLES = b"\x01\x00" * 8, b"\x02\x00" * 16, b"\x03\x00" * 4
 
 
 class RefresherAudioTest(unittest.TestCase):
@@ -381,15 +382,17 @@ class RefresherAudioTest(unittest.TestCase):
             with_recall = create_audio({"language": "en", "stories": [], "segments": [recalled]}, self.store, None, "demo")
             again = create_audio({"language": "en", "stories": [], "segments": [recalled]}, self.store, None, "demo")
 
-        # The story is rendered once; the second briefing only needs the small recall clip.
-        self.assertEqual([call.args[0] for call in voice.call_args_list], [plain["text"], recalled["refresher_text"]])
-        self.assertEqual(self.store.usage("demo")[0]["calls"], 2)
+        # The opening line and the story are each rendered once; the second briefing only adds the small recall clip.
+        introduction, body = pipeline._split_introduction(plain["text"])
+        opening = pipeline.spoken_opening(introduction, "en")
+        self.assertEqual([call.args[0] for call in voice.call_args_list], [opening, body, recalled["refresher_text"]])
+        self.assertEqual(self.store.usage("demo")[0]["calls"], 3)
         self.assertEqual(with_recall, again)
         self.assertNotEqual(with_recall, without)
-        # The single-clip briefing is the story's clip itself; the other plays the recall first, then that same clip.
-        self.assertEqual(self.samples(without), STORY_SAMPLES)
-        self.assertEqual(self.samples(with_recall), REFRESHER_SAMPLES + STORY_SAMPLES)
-        self.assertEqual(len(list(self.store.audio_dir.glob("*.wav"))), 3)
+        # Both open with the shared line and end with the same story clip; the recall sits just before its story.
+        self.assertEqual(self.samples(without), INTRO_SAMPLES + STORY_SAMPLES)
+        self.assertEqual(self.samples(with_recall), INTRO_SAMPLES + REFRESHER_SAMPLES + STORY_SAMPLES)
+        self.assertEqual(len(list(self.store.audio_dir.glob("*.wav"))), 5)  # three clips and two assembled briefings
 
     def test_the_story_clip_is_shared_whatever_the_recall_says(self):
         plain, recalled = self.segments()
@@ -401,8 +404,9 @@ class RefresherAudioTest(unittest.TestCase):
         with patch("backend.app.audio.offline_voice", side_effect=speak) as voice:
             for segment in (plain, recalled, other):
                 create_audio({"language": "en", "stories": [], "segments": [segment]}, self.store, None, "demo")
-        self.assertEqual(voice.call_count, 3)  # one story clip and two different recalls
-        self.assertEqual(sum(call.args[0] == plain["text"] for call in voice.call_args_list), 1)
+        self.assertEqual(voice.call_count, 4)  # the opening line, one story clip and two different recalls
+        body = pipeline._split_introduction(plain["text"])[1]
+        self.assertEqual(sum(call.args[0] == body for call in voice.call_args_list), 1)
 
     def test_generated_briefings_of_two_listeners_share_the_story_clip(self):
         listener_a, listener_b = self.listeners
@@ -426,10 +430,12 @@ class RefresherAudioTest(unittest.TestCase):
         self.assertEqual(story_segment(story_b), story_a)
         # The story clip (introduction, headline, figures) is rendered once, for the first listener; the second
         # listener's briefing only adds the small recall clip.
+        introduction, body = pipeline._split_introduction(story_a["text"])
         self.assertEqual([call.args[0] for call in voice.call_args_list],
-                         [spoken_text(story_a, "Freedonia bank update", "en"), story_b["refresher_text"]])
-        self.assertEqual(self.samples(new["audio_url"].split("?")[0]), STORY_SAMPLES)
-        self.assertEqual(self.samples(returning["audio_url"].split("?")[0]), REFRESHER_SAMPLES + STORY_SAMPLES)
+                         [pipeline.spoken_opening(introduction, "en"),
+                          spoken_text(dict(story_a, text=body), "Freedonia bank update", "en"), story_b["refresher_text"]])
+        self.assertEqual(self.samples(new["audio_url"].split("?")[0]), INTRO_SAMPLES + STORY_SAMPLES)
+        self.assertEqual(self.samples(returning["audio_url"].split("?")[0]), INTRO_SAMPLES + REFRESHER_SAMPLES + STORY_SAMPLES)
 
     def test_a_recall_is_spoken_in_the_story_voice_and_language_ahead_of_it(self):
         plain, recalled = self.segments("de")
@@ -448,10 +454,12 @@ class RefresherAudioTest(unittest.TestCase):
             ):
                 create_audio({"language": "de", "stories": [], "segments": [recalled]}, self.store, provider, "live")
             counts[voice] = len(spoken)
-        self.assertEqual(spoken[:2], [(recalled["refresher_text"], "de"), (recalled["text"], "de")])
-        self.assertEqual(counts, {"voice-a": 2, "voice-b": 4})
-        # Another voice renders both clips again: neither the story nor the recall is shared across voices.
-        self.assertEqual(len(list(self.store.audio_dir.glob("*.mp3"))), 6)
+        introduction, body = pipeline._split_introduction(recalled["text"])
+        self.assertEqual(spoken[:3], [(pipeline.spoken_opening(introduction, "de"), "de"),
+                                      (recalled["refresher_text"], "de"), (body, "de")])
+        self.assertEqual(counts, {"voice-a": 3, "voice-b": 6})
+        # Another voice renders every clip again: nothing is shared across voices.
+        self.assertEqual(len(list(self.store.audio_dir.glob("*.mp3"))), 8)  # three clips and one briefing per voice
 
 
 if __name__ == "__main__":

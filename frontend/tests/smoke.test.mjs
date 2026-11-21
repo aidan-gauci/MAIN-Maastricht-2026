@@ -57,7 +57,7 @@ function postResponse(page, path) {
   );
 }
 
-test('built listener generates briefings, traces evidence, shows costs, and recovers missing audio', { timeout: 45_000 }, async t => {
+test('built listener generates briefings, traces evidence, shows costs, and recovers missing audio', { timeout: 75_000 }, async t => {
   await readFile(join(repoRoot, 'frontend', 'dist', 'index.html'));
   const dataDirectory = await mkdtemp(join(tmpdir(), 'briefing-browser-'));
   const origin = await startServer(t, dataDirectory);
@@ -272,5 +272,118 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   assert.equal(german.audio_status, 'ready');
   assert.match(german.segments[0].text, /^(?:Einfach gesagt steht Folgendes in den Quellen\.|Das berichten die Quellen\.|Das sind die berichteten Kennzahlen\.)/);
   await customMeta.getByText('Deutsch', { exact: true }).waitFor();
+
+  // Listen view: the disclosure says the voice is AI-generated and that figures are not investment advice.
+  await page.locator('.voice-disclosure').getByText(/The narration is an AI-generated voice\..*This briefing reports figures; it is not investment advice\..*Listen critically/).waitFor();
+
+  // Evidence: the counts line, and merge badges that make merged editions visible.
+  const evidenceStories = evidenceData.length;
+  const evidenceArticles = evidenceData.reduce((sum, item) => sum + item.articles.length, 0);
+  const evidenceClaims = evidenceData.reduce((sum, item) => sum + item.facts.length, 0);
+  const noOverflow = () => page.evaluate(() => {
+    const card = document.querySelector('.content-card');
+    return document.documentElement.scrollWidth <= window.innerWidth && card.scrollWidth <= card.clientWidth;
+  });
+  await page.getByRole('button', { name: 'Evidence', exact: true }).click();
+  const counts = page.locator('.evidence-summary span');
+  await counts.first().waitFor();
+  // The fixture has no event threads, so no events figure: stories, articles and claims.
+  assert.deepEqual(await counts.allTextContents(), [`${evidenceStories} stories`, `${evidenceArticles} articles`, `${evidenceClaims} extracted claims`]);
+  await page.getByText(`${evidenceArticles} articles merged into ${evidenceStories} stories.`).waitFor();
+  assert.equal(await page.locator('.event-toggle').count(), 0, 'no event headers without threads');
+  const storyCard = title => page.locator('article.evidence-card').filter({ has: page.getByRole('button', { name: new RegExp(title) }) });
+  const centralBank = storyCard('Central bank holds rate');
+  const editionsBadge = centralBank.locator('.merge-badge', { hasText: /^3 editions/ });
+  await editionsBadge.waitFor();
+  assert.match(await editionsBadge.innerText(), /EN\s*·\s*DE\s*·\s*NL/);
+  const translated = evidenceData.filter(item => new Set(item.articles.map(article => article.language)).size > 1).length;
+  assert.equal(await page.locator('.merge-badge', { hasText: /editions/ }).count(), translated, 'only translated stories carry the editions badge');
+  assert.equal(await page.locator('.merge-badge', { hasText: /outlets/ }).count(), 0, 'no outlets badge when every story has one outlet');
+  await centralBank.getByRole('button').click();
+  await centralBank.getByText('Merged from 3 articles:').waitFor();
+  assert.equal(await centralBank.locator('.evidence-sources a .lang-tag').count(), 3);
+  assert.ok(await noOverflow(), 'evidence fits the phone viewport');
+
+  // Event threads: the fixture has none, so group its stories in the browser (the first three, and all the rest) and check the grouping.
+  const eventA = evidenceData.slice(0, 3);
+  const eventB = evidenceData.slice(3);
+  await page.route('**/api/evidence', async route => {
+    const response = await route.fetch();
+    const stories = await response.json();
+    for (const story of stories) {
+      if (eventA.some(item => item.id === story.id)) Object.assign(story, { thread_id: 'thread-smoke-a', thread_title: 'Smoke test event A' });
+      else Object.assign(story, { thread_id: 'thread-smoke-b', thread_title: 'Smoke test event B' });
+    }
+    await route.fulfill({ response, json: stories });
+  });
+  await page.reload();
+  await page.getByRole('img', { name: 'Maze' }).waitFor();
+  await page.getByRole('button', { name: 'Evidence', exact: true }).click();
+  await counts.first().waitFor();
+  assert.deepEqual(await counts.allTextContents(), [`${evidenceStories} stories`, '2 events', `${evidenceArticles} articles`, `${evidenceClaims} extracted claims`]);
+  await page.getByText(`${evidenceStories} stories grouped into 2 events.`).waitFor();
+  const kicker = items => {
+    const days = (Math.max(...items.map(item => Date.parse(item.publication_date))) - Math.min(...items.map(item => Date.parse(item.publication_date)))) / 86_400_000;
+    const outlets = new Set(items.flatMap(item => item.articles.map(article => article.source))).size;
+    return `Event · ${items.length} reports ${days === 0 ? 'on a single day' : `over ${days} ${days === 1 ? 'day' : 'days'}`} · ${outlets} ${outlets === 1 ? 'outlet' : 'outlets'}`;
+  };
+  const toggleA = page.locator('.event-toggle', { hasText: 'Smoke test event A' });
+  const toggleB = page.locator('.event-toggle', { hasText: 'Smoke test event B' });
+  const isExpanded = (title, expected) => page.waitForFunction(([name, value]) =>
+    [...document.querySelectorAll('.event-toggle')].find(button => button.textContent.includes(name))?.getAttribute('aria-expanded') === value, [title, expected]);
+  assert.equal(await page.locator('.event-toggle').count(), 2);
+  assert.equal((await toggleA.locator('.event-kicker').innerText()).trim(), kicker(eventA));
+  assert.equal((await toggleB.locator('.event-kicker').innerText()).trim(), kicker(eventB));
+  assert.equal(await toggleA.getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('.event-members').count(), 0);
+  // The bigger event is listed first.
+  assert.equal(await page.locator('.event-toggle').first().innerText().then(text => text.includes('Smoke test event B')), true);
+
+  // Searching keeps an event if any member matches and shows only the matching members.
+  const search = page.getByLabel('Find a story or publisher');
+  await search.fill(eventA[1].title);
+  await toggleA.locator('.event-match', { hasText: '1 of 3 match' }).waitFor();
+  await isExpanded('Smoke test event A', 'true');
+  assert.equal(await page.locator('.event-toggle').count(), 1, 'events without a match are hidden');
+  assert.equal(await page.locator('.event-members > article').count(), 1);
+  await search.fill('');
+  await isExpanded('Smoke test event A', 'false');
+  await search.fill('zzz no such story');
+  await page.getByText('No stories match your search.').waitFor();
+  assert.equal(await page.locator('.event-toggle').count(), 0);
+  await search.fill('');
+
+  // The header is a real button: Enter opens it, Space closes it.
+  await toggleA.focus();
+  await page.keyboard.press('Enter');
+  await isExpanded('Smoke test event A', 'true');
+  const panelId = await toggleA.getAttribute('aria-controls');
+  assert.equal(await page.locator(`#${panelId} > article`).count(), 3);
+  assert.match(await page.locator(`#${panelId} .evidence-count`).first().innerText(), /^\d+ \w+ · \d+ sources?$/, 'members show their date');
+  assert.ok(await noOverflow(), 'an expanded event fits the phone viewport');
+  await page.keyboard.press('Space');
+  await isExpanded('Smoke test event A', 'false');
+  assert.equal(await page.locator('.event-members').count(), 0);
+
+  // "Inspect evidence" from the Listen view lands on the story; "Browse all evidence" then returns to it inside its event.
+  // A listener hears unheard stories first, so this one has used up the ten fixture stories. Continue as a new listener.
+  await page.evaluate(() => localStorage.setItem('briefing-listener-id', crypto.randomUUID()));
+  await page.reload();
+  await page.getByRole('button', { name: 'Listen', exact: true }).click();
+  const [againResponse] = await Promise.all([postResponse(page, '/api/briefings'), create.click()]);
+  const listened = (await againResponse.json()).stories[0];
+  const listenedEvidence = evidenceData.find(item => item.id === listened.id);
+  assert.ok(listenedEvidence, 'the first story of the briefing has evidence');
+  const listenedEvent = eventA.includes(listenedEvidence) ? 'Smoke test event A' : 'Smoke test event B';
+  await page.getByRole('button', { name: `Inspect evidence for ${listened.title}`, exact: true }).click();
+  await page.getByRole('heading', { name: 'Evidence for this story' }).waitFor();
+  await page.getByRole('heading', { name: listened.title, exact: true }).waitFor();
+  assert.equal(await page.locator('.event-toggle').count(), 0, 'one story is shown without its event');
+  await page.locator('.event-context').getByText(/^Part of an event · \d+ reports/).waitFor();
+  await page.getByRole('button', { name: 'Browse all evidence' }).click();
+  await isExpanded(listenedEvent, 'true');
+  const storyButton = page.locator(`#evidence-story-${listened.id}`);
+  assert.equal(await storyButton.getAttribute('aria-expanded'), 'true');
+  await page.waitForFunction(id => document.activeElement?.id === id, `evidence-story-${listened.id}`);
   assert.deepEqual(pageErrors, []);
 });

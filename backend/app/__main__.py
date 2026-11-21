@@ -42,6 +42,22 @@ def main():
     grouping.add_argument("--probe", action="append", default=[], metavar="WORD",
                           help="Report how many stories with WORD in an English headline sit in an event thread")
     grouping.add_argument("--json", action="store_true", help="Print the full report as JSON")
+    backtest = commands.add_parser(
+        "backtest-audio", help="Simulate an audience on the imported corpus: clips rendered, cost, checks; no provider calls")
+    backtest.add_argument("--listeners", default="100,1000,10000", help="Audience sizes, comma separated")
+    backtest.add_argument("--days", type=int, default=3, help="Consecutive daily briefings per listener")
+    backtest.add_argument("--seed", type=int, default=1)
+    backtest.add_argument("--even", action="store_true", help="Spread choices evenly over the options (worst case for sharing)")
+    backtest.add_argument("--both", action="store_true", help="Report the realistic spread and the even worst case")
+    backtest.add_argument("--usd-per-1000-chars", type=float, default=0.08)
+    backtest.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1), help="Processes computing listener types")
+    claims = commands.add_parser(
+        "audit-claims", help="Check every stored figure and narration against the original articles; no provider calls")
+    claims.add_argument("path", type=Path, nargs="?", default=DEMO / "articles.jsonl",
+                        help="The feeds the corpus was imported from")
+    commands.add_parser(
+        "translate-labels",
+        help="Live: translate the imported stories' headlines and measure names for the other listener languages")
     purge = commands.add_parser("purge-event")
     purge.add_argument("--confirm", action="store_true", required=True)
     reset = commands.add_parser("reset-demo", help="Delete generated fixture data; the next start or import rebuilds it")
@@ -71,6 +87,38 @@ def run(parser, args):
         print(run_evaluation(args.path, args.embeddings, as_json=args.json, probes=args.probe))
         return
     store = get_store()
+    if args.command == "backtest-audio":
+        from .audio_backtest import run as backtest_audio
+        store.initialize()
+        sizes = tuple(int(value) for value in args.listeners.split(",") if value.strip())
+        computed = {}
+        spreads = (False, True) if args.both else (args.even,)
+        reports = [backtest_audio(store, sizes, args.days, args.seed, even, args.usd_per_1000_chars, args.workers, computed)
+                   for even in spreads]
+        print(json.dumps(reports if args.both else reports[0], indent=2))
+        return
+    if args.command == "audit-claims":
+        from .claim_audit import audit
+        store.initialize()
+        summaries = store.recommendation_snapshot(lambda stories, summaries: summaries)
+        print(json.dumps(audit(store, read_articles(args.path), summaries), indent=2))
+        return
+    if args.command == "translate-labels":
+        # For a corpus imported before labels were translated. Only what is missing is asked for, so it can
+        # be run again; figures, evidence and grouping are untouched and the summaries are prepared again.
+        from .service import get_providers
+        from .summaries import prepare_summaries
+        from .translations import translate_corpus
+        if MODE != "live" or os.environ.get("ALLOW_EXTERNAL_PROVIDER_DATA") != "1":
+            parser.error("translate-labels needs BRIEFING_MODE=live and ALLOW_EXTERNAL_PROVIDER_DATA=1")
+        store.initialize()
+        stories = store.stories()
+        if not stories:
+            parser.error("Nothing to translate: import a corpus for this mode first")
+        report = translate_corpus(stories, get_providers(store))
+        store.replace_corpus(store.articles(), stories, prepare_summaries(stories))
+        print(json.dumps({**report, "mode": MODE, "corpus": CORPUS}))
+        return
     if args.command == "purge-event":
         if CORPUS != "event":
             parser.error("Set BRIEFING_CORPUS=event before purging")

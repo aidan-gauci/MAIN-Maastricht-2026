@@ -63,6 +63,38 @@ class ExtractionOutputError(ValueError):
     """
 
 
+EMBEDDING_BATCH_TEXTS = 256
+
+# One entry per article, so no article in a request is skipped. In a live import of 1,740 articles sent
+# eight to eleven at a time under a "news clusters" prompt, the model returned facts for only a few of
+# each batch and 678 of 1,498 stories got none.
+EXTRACTION_PROMPT = (
+    "You extract reported figures from business news articles. Return JSON "
+    '{"articles":[{"article_id":"...","topics":["..."],"facts":[{"value":"...","unit":"...","measure":"...","evidence":"..."}]}]} '
+    "with exactly one entry for every article in the input, in input order. For each article give up to 8 facts, "
+    "choosing its most newsworthy reported quantities (amounts, rates, changes, counts, prices). "
+    "value is the number exactly as printed in the article. unit is the unit exactly as printed next to it "
+    '(for example "%", "percent", "billion", "million", "basis points"); do not add a currency name that is not printed. '
+    "evidence is a verbatim span copied character for character from that article's body, at most 160 characters, "
+    "containing the number and what it measures. Do not paraphrase, shorten words, or join separate sentences. "
+    "measure is a short name, two to six words, for what the number measures, in the article's language and built only "
+    'from words in that sentence, specific enough to stand alone when read aloud (for example "UK unemployment rate", '
+    '"Brent crude price", "third-quarter revenue", "Leitzins der Zentralbank"); it contains no numbers. '
+    "Skip dates, years, ages, IDs, phone numbers and rankings. Use an empty facts list only when the article "
+    "reports no such quantity. topics are one to three lower-case subject words. Never invent, convert or round a figure."
+)
+
+LABEL_TRANSLATION_PROMPT = (
+    "You translate short labels for a spoken news briefing: a news headline, or the name of a reported measure. "
+    'Return JSON {"<language code>":["...", ...]} with one list for every requested target language, each holding '
+    "exactly one translation for every input text, in input order. Translate faithfully and concisely, in the register "
+    "of financial news in that language. Keep every number exactly as printed, in digits (only the decimal separator may "
+    "follow the target language); never write a number as a word or add one. Keep names of companies, people, "
+    "indices, currencies and tickers unchanged. Add nothing and leave nothing out. A measure name stays a short noun "
+    'phrase without a verb or a number ("utility sector earnings increase" becomes "Gewinnanstieg im Versorgungssektor", '
+    '"winststijging in de nutssector").'
+)
+
 # Only these are retried on smaller batches; every other extraction error is a provider failure.
 RECOVERABLE_EXTRACTION_ERRORS = (ExtractionOutputError, json.JSONDecodeError)
 
@@ -110,7 +142,8 @@ class Providers:
             raise RuntimeError("Install the openai package to use live providers") from exc
         if not os.getenv("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is not configured")
-        return OpenAI()
+        # Parallel preparation can meet short rate limits; the SDK backs off and retries these itself.
+        return OpenAI(max_retries=6)
 
     def embed(self, texts: list[str], *, stage: str, dimensions: int | None = None) -> list[list[float]]:
         """Callers name the stage so briefing-time calls never count as preparation."""
@@ -129,11 +162,17 @@ class Providers:
             return vectors
         client = self._client()
         model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-        result = client.embeddings.create(model=model, input=texts, **({"dimensions": dimensions} if dimensions else {}))
-        in_tokens = getattr(result.usage, "prompt_tokens", 0) or 0
-        self.record_usage(stage, mode=self.mode, input_tokens=in_tokens,
-                          estimated_usd=self._usd(input_tokens=in_tokens, prefix="OPENAI_EMBEDDING"))
-        return [list(item.embedding) for item in result.data]
+        # One request may carry at most 300,000 tokens; a whole corpus in one call is rejected. Send bounded
+        # chunks (256 texts of at most ~400 tokens each stays far below the limit).
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), EMBEDDING_BATCH_TEXTS):
+            chunk = texts[start:start + EMBEDDING_BATCH_TEXTS]
+            result = client.embeddings.create(model=model, input=chunk, **({"dimensions": dimensions} if dimensions else {}))
+            in_tokens = getattr(result.usage, "prompt_tokens", 0) or 0
+            self.record_usage(stage, mode=self.mode, input_tokens=in_tokens,
+                              estimated_usd=self._usd(input_tokens=in_tokens, prefix="OPENAI_EMBEDDING"))
+            vectors.extend(list(item.embedding) for item in result.data)
+        return vectors
 
     def extract(self, articles: list[dict[str, Any]]) -> dict[str, Any]:
         """Extract sourced facts from one bounded, explicitly opted-in batch."""
@@ -165,7 +204,7 @@ class Providers:
             max_tokens=max_output_tokens,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "Extract concise factual news clusters. Return JSON {stories:[{title,topics,publication_date,facts:[{value,unit,evidence,article_id}]}]}. Each fact must contain one reported numeric quantity, the exact unit, an exact evidence span of at most 160 characters containing that quantity and measure, and an existing article_id. Skip dates, IDs, and unsupported quantities. Return at most 8 facts per article, choosing its most newsworthy figures. Preserve numeric values and units exactly. Merge duplicate coverage when clearly the same event; keep different reported values as separate claims and do not resolve disagreements. Never invent context or advise."},
+                {"role": "system", "content": EXTRACTION_PROMPT},
                 {"role": "user", "content": payload_text},
             ],
         )
@@ -182,7 +221,49 @@ class Providers:
             raise ExtractionOutputError("Provider extraction reply was not valid JSON") from exc
         if not isinstance(data, dict):
             raise ExtractionOutputError("Provider extraction reply was not a JSON object")
-        return data
+        if "articles" not in data:
+            return data
+        # One entry per article becomes one single-article story; preparation joins editions and
+        # cross-outlet reports with its own grouping, so the model is not asked to cluster.
+        titles = {str(a.get("article_id")): str(a.get("title", "")) for a in articles}
+        stories, answered = [], []
+        for entry in data.get("articles") or []:
+            if not isinstance(entry, dict) or str(entry.get("article_id")) not in titles:
+                continue
+            article_id = str(entry["article_id"])
+            answered.append(article_id)
+            facts = [dict(fact, article_id=article_id) for fact in entry.get("facts") or [] if isinstance(fact, dict)]
+            stories.append({"title": titles[article_id], "own_title": True, "topics": entry.get("topics") or [], "facts": facts})
+        return {"stories": stories, "answered": answered}
+
+    def translate_labels(self, texts: list[str], source: str, targets: tuple[str, ...] | list[str]) -> dict[str, Any]:
+        """Translate short labels (a headline, measure names) with the small model; {} when not live.
+
+        The caller checks every translation against its original before keeping it.
+        """
+        if not self.live or not texts or not targets:
+            return {}
+        client = self._client()
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_SMALL_MODEL", "gpt-4o-mini"),
+            temperature=0,
+            max_tokens=2000,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": LABEL_TRANSLATION_PROMPT},
+                {"role": "user", "content": json.dumps(
+                    {"source_language": source, "target_languages": list(targets), "texts": texts}, ensure_ascii=False)},
+            ],
+        )
+        usage = getattr(response, "usage", None)
+        in_tokens, out_tokens = getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0
+        self.record_usage("label_translation", mode=self.mode, input_tokens=in_tokens, output_tokens=out_tokens,
+                          estimated_usd=self._usd(input_tokens=in_tokens, output_tokens=out_tokens))
+        try:
+            data = json.loads(response.choices[0].message.content or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def generate_script(self, prompt: str, language: str = "en") -> str:
         """Return a live draft, or "" so the caller keeps its deterministic verified narration."""

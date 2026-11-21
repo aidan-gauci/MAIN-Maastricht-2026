@@ -204,7 +204,9 @@ class RealProviderAdapterTest(unittest.TestCase):
     def test_import_keeps_run_going_and_reports_heuristic_articles(self):
         self.bad_when = lambda ids: "a1" in ids
         report = {}
-        stories = service.prepare_corpus(self.store, self.articles, allow_fallback=False, report=report)
+        # Label translation is a later step with its own requests; this test counts extraction requests.
+        with patch.object(service, "translate_corpus", return_value={}):
+            stories = service.prepare_corpus(self.store, self.articles, allow_fallback=False, report=report)
 
         self.assertEqual({"heuristic_fallback_articles": 1}, report)
         self.assertEqual(4, len(stories))

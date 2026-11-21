@@ -83,9 +83,18 @@ class RecommendationTest(unittest.TestCase):
         ranked = pipeline.rank([european, american], profile({"battery": 1.0}), region="Europe")
 
         self.assertEqual([row["id"] for row in ranked], ["battery-eu"])
+        # 0.4 topic share + 0.25 strongest matched interest + 0.3 relevance + 0.2 * recency + 0.1 * novelty.
         self.assertEqual(ranked[0]["score_components"], {
-            "topic_match": 1.0, "relevance": 1.0, "recency": 0.5, "novelty": 0.5, "score": 0.85,
+            "topic_match": 1.0, "relevance": 1.0, "recency": 0.5, "novelty": 0.5, "score": 1.1,
         })
+
+    def test_a_story_on_one_of_several_chosen_topics_outranks_unrelated_headline_news(self):
+        # Three chosen topics: a day-old story on one of them comes before today's biggest unrelated story.
+        matching = story("housing-starts", "housing", title="Housing starts rise", publication_date="2026-11-19")
+        headline = story("chip-news", "semiconductors", title="Chipmaker results", publication_date="2026-11-20")
+        headline["articles"].append({**headline["articles"][0], "article_id": "chip-news-b", "source": "Second Outlet"})
+        ranked = pipeline.rank([headline, matching], profile({"housing": 1.0, "jobs": 1.0, "energy": 1.0}))
+        self.assertEqual([row["id"] for row in ranked], ["housing-starts", "chip-news"])
 
     def test_only_latest_rating_changes_weights_for_one_listener(self):
         stories = [story("rated", "energy"), story("other-energy", "energy"), story("forecast", "growth")]

@@ -20,5 +20,27 @@
     "language": "en",
     "duration": 5,
     "style": "Lead with the signal and explain economic and market implications"
+  },
+  {
+    "id": "policy",
+    "name": "Central Bank and Policy Watcher",
+    "description": "Follow interest rates, inflation, growth and the decisions of central banks and governments.",
+    "topic_weights": {"rates": 1, "inflation": 1, "growth": 0.8, "jobs": 0.6, "trade": 0.5},
+    "excluded_topics": [],
+    "expertise": "intermediate",
+    "language": "en",
+    "duration": 8,
+    "style": "Give the decision first, then the figures that explain it"
+  },
+  {
+    "id": "alltag",
+    "name": "Wirtschaft im Alltag (Deutsch)",
+    "description": "Die Wirtschaftsnachrichten des Tages auf Deutsch: Preise, Arbeit, Energie und Zinsen.",
+    "topic_weights": {"inflation": 1, "jobs": 0.9, "energy": 0.9, "rates": 0.7, "housing": 0.6},
+    "excluded_topics": [],
+    "expertise": "beginner",
+    "language": "de",
+    "duration": 3,
+    "style": "Einfache Sprache mit Bezug zum Alltag"
   }
 ]

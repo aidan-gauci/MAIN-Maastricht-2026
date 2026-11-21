@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, Info, LoaderCircle, Play, RotateCw, ShieldCheck, Square, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
+import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, Info, Languages, Layers, LoaderCircle, Newspaper, Play, RotateCw, ShieldCheck, Square, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
 import { TracesView, type TraceFocus } from './traces';
+import { count, eventSummary, eventThreads, hasMergeBadges, joinList, mergeInfo, shortDate, threadStats, type EventThread, type Merge } from './events';
 import { ThemeToggle } from './theme';
 import logoForLight from './assets/brand/maze-logo-for-light-mode.svg';
 import logoForDark from './assets/brand/maze-logo-for-dark-mode.svg';
 
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
-type Source = { article_id: string; title: string; source: string; url: string };
-type Story = { id: string; title: string; reason: string; title_language?: string };
+type Source = { article_id: string; title: string; source: string; url: string; language?: string };
+type Story = { id: string; title: string; reason: string; title_language?: string; source_title?: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean; refresher_text?: string; refresher_fact_ids?: string[] };
 type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
 type VoicePreset = { id: string; label: string; description?: string; preview?: boolean; languages?: string[] | null };
@@ -21,7 +22,8 @@ const voiceOptionLabel = (preset: VoicePreset, code: string) => {
 type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
 type ScheduleDraft = Omit<Schedule, 'schedule_id' | 'schedule_version' | 'generation_at' | 'delivery_at' | 'dispatch_status'>;
 type Fact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string };
-type Evidence = { id: string; title: string; publication_date?: string; articles: Source[]; facts: Fact[] };
+// thread_id and thread_title are present only on stories that belong to an event thread of two or more stories.
+type Evidence = { id: string; title: string; publication_date?: string; articles: Source[]; facts: Fact[]; thread_id?: string; thread_title?: string };
 type Costs = { mode: string; stages: { stage: string; calls: number; input_tokens: number; output_tokens: number; characters: number; estimated_usd: number | null }[]; article_count: number; preparation_usd: number | null; per_briefing_usd: number | null; ten_x_preparation_usd: number | null };
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -421,14 +423,19 @@ export default function App() {
             <div className="form-section">
               <label htmlFor="profile">Choose a listener profile</label>
               <div className="select-wrap">
-                <select id="profile" value={profileId} onChange={event => setProfileId(event.target.value)}>
+                <select id="profile" value={profileId} onChange={event => {
+                  setProfileId(event.target.value);
+                  // A profile is heard in its own language unless the listener then chooses another.
+                  const chosen = profiles.find(profile => profile.id === event.target.value)?.language;
+                  if (chosen && languages.includes(chosen)) setLanguage(chosen);
+                }}>
                   {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
                 </select>
               </div>
               {activeProfile && <>
                 {activeProfile.description && <p className="profile-description">{activeProfile.description}</p>}
                 <div className="settings-row">
-                  {activeProfile.duration && <span><Clock3 size={15}/>About {activeProfile.duration} minutes</span>}
+                  {activeProfile.duration && <span><Clock3 size={15}/>{activeProfile.duration} stories</span>}
                   {(language || activeProfile.language) && <span><AudioLines size={15}/>{languageLabel(language || activeProfile.language || 'en')}</span>}
                   {activeProfile.expertise && <span><Gauge size={15}/>{activeProfile.expertise}</span>}
                 </div>
@@ -454,7 +461,7 @@ export default function App() {
               </fieldset>
               <div className="inline-fields">
                 <label>Depth<select value={expertise} onChange={event => setExpertise(event.target.value)}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
-                <label>Length<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={3}>3 minutes</option><option value={5}>5 minutes</option><option value={8}>8 minutes</option></select></label>
+                <label>Length<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={3}>3 stories, about 1 minute</option><option value={5}>5 stories, about 2 minutes</option><option value={8}>8 stories, about 3 minutes</option></select></label>
               </div>
             </div>}
           <div className="delivery-settings">
@@ -580,9 +587,10 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
     </div>
     <div className="briefing-title-row">
       <h2 className="briefing-heading" ref={headingRef} tabIndex={-1}>Today, in context.</h2>
-      <div className="briefing-facts" title={briefing.requested_minutes ? `You asked for about ${briefing.requested_minutes} minutes. Length depends on how many verified figures the reporting contains.` : undefined}>
+      <div className="briefing-facts" title={briefing.requested_minutes ? `You asked for ${briefing.requested_minutes} stories. Length depends on how many verified figures the reporting contains.` : undefined}>
         <span>{storyCount} {storyCount === 1 ? 'story' : 'stories'}</span>
-        {typeof briefing.estimated_seconds === 'number' && <span><Clock3 size={14} aria-hidden="true"/>{briefing.estimated_seconds < 60 ? 'under 1 min' : `about ${Math.round(briefing.estimated_seconds / 60)} min`}</span>}
+        {/* estimated_seconds counts the figures alone; headlines, the opening line and pauses make the audio about three times as long (measured on rendered briefings). */}
+        {typeof briefing.estimated_seconds === 'number' && <span><Clock3 size={14} aria-hidden="true"/>about {Math.max(1, Math.round(briefing.estimated_seconds * 3 / 60))} min</span>}
       </div>
     </div>
     <div className={ready ? 'player ready' : 'player'}>
@@ -618,6 +626,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         return <article className="story" key={story.id}>
           <div className="story-body">
             <h3>{story.title}</h3>
+            {story.source_title && <p className="translated-headline">Translated headline. Original: {story.source_title}</p>}
             <p>{story.reason}</p>
             <div className="story-feedback" aria-label={`Rate ${story.title}`}><span>Was this useful?</span><button type="button" className={ratings[story.id] === 'up' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'up')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} useful`} aria-pressed={ratings[story.id] === 'up'}><ThumbsUp size={14}/> Helpful</button><button type="button" className={ratings[story.id] === 'down' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'down')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} not useful`} aria-pressed={ratings[story.id] === 'down'}><ThumbsDown size={14}/> Not useful</button></div>
             <div className="transcript">
@@ -647,8 +656,94 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         </article>;
       })}
     </div>
-    <div className="voice-disclosure"><p><strong>About this audio</strong><br/>The narration is AI-generated. Story selection and summaries are grounded in the cited reporting. Listen critically, especially where sources disagree.</p></div>
+    <div className="voice-disclosure"><p><strong>About this audio</strong><br/>The narration is an AI-generated voice. Story selection and summaries are grounded in the cited reporting. This briefing reports figures; it is not investment advice. Listen critically, especially where sources disagree.</p></div>
   </div>;
+}
+
+type EvidenceEntry =
+  | { kind: 'story'; story: Evidence; weight: number; date: string }
+  | { kind: 'event'; thread: EventThread<Evidence>; shown: Evidence[]; weight: number; date: string };
+const storyMatches = (story: Evidence, term: string) => !term || [story.title, ...story.articles.map(article => `${article.title} ${article.source}`)].some(value => value.toLowerCase().includes(term));
+
+// Merge badges: translated editions of one outlet, and distinct outlets, that were combined into this story.
+function MergeBadges({ merge }: { merge: Merge }) {
+  return <>
+    {merge.editions > 1 && <span className="merge-badge">
+      <Languages size={12} aria-hidden="true"/>{merge.editions} editions
+      <span className="merge-langs" aria-hidden="true">{merge.editionLanguages.map(code => code.toUpperCase()).join(' · ')}</span>
+      <span className="visually-hidden"> in {joinList(merge.editionLanguages.map(englishLanguageName))}</span>
+    </span>}
+    {merge.outlets > 1 && <span className="merge-badge"><Newspaper size={12} aria-hidden="true"/>{merge.outlets} outlets</span>}
+  </>;
+}
+function MergeNote({ merge }: { merge: Merge }) {
+  if (merge.articles < 2) return null;
+  const listed = merge.families.slice(0, 4).map(family => family.languages.length > 1 ? `${family.name} (${family.languages.map(englishLanguageName).join(', ')})` : family.name);
+  const more = merge.families.length - listed.length;
+  return <p className="merge-note">Merged from {merge.articles} articles: {listed.join('; ')}{more > 0 ? ` and ${more} more` : ''}.</p>;
+}
+
+function EvidenceCard({ item, expanded, single = false, dated = false, onToggle }: { item: Evidence; expanded: boolean; single?: boolean; dated?: boolean; onToggle?: () => void }) {
+  const merge = mergeInfo(item);
+  const date = dated ? shortDate(item.publication_date) : '';
+  return <article className="evidence-card">
+    {single ?
+      <>
+        <h3 className="evidence-title"><strong>{item.title}</strong></h3>
+        {hasMergeBadges(merge) && <div className="evidence-meta evidence-meta-single"><MergeBadges merge={merge}/></div>}
+      </> :
+      <button id={`evidence-story-${item.id}`} className="evidence-title" onClick={onToggle} aria-expanded={expanded}>
+        <span>
+          <span className="evidence-meta"><span className="evidence-count">{date && `${date} · `}{count(item.articles.length, 'source')}</span><MergeBadges merge={merge}/></span>
+          <strong>{item.title}</strong>
+        </span>
+        <ChevronDown size={17} className={expanded ? 'rotated' : ''}/>
+      </button>}
+    {expanded && <div className="evidence-detail">
+      <MergeNote merge={merge}/>
+      <div className="evidence-sources">
+        {item.articles.map(article => <a key={article.article_id} href={article.url} target="_blank" rel="noreferrer">
+          <span>{article.source}{article.language && <small className="lang-tag">{article.language.toUpperCase()}<span className="visually-hidden"> ({englishLanguageName(article.language)})</span></small>}</span>
+          <strong>{article.title}</strong><span>Open source ↗</span>
+        </a>)}
+      </div>
+      {item.facts.length > 0 && <div className="fact-list">
+        <span className="section-kicker">Extracted claims</span>
+        {item.facts.map(fact => <div className="fact" key={fact.id}>
+          <span className={['conflict', 'unresolved', 'needs_review'].includes(fact.conflict_status) ? 'fact-dot conflict' : 'fact-dot'}/>
+          <div><p>{fact.statement}</p>{(fact.value || fact.unit) && <span>{fact.value} {fact.unit}</span>}{fact.evidence && <blockquote>“{fact.evidence}”</blockquote>}</div>
+        </div>)}
+      </div>}
+    </div>}
+  </article>;
+}
+
+// One developing event: stories linked by the backend, shown under a single collapsible header.
+function EventGroup({ entry, expanded, openStory, onToggle, onToggleStory }: {
+  entry: Extract<EvidenceEntry, { kind: 'event' }>;
+  expanded: boolean;
+  openStory: string | null;
+  onToggle: () => void;
+  onToggleStory: (storyId: string) => void;
+}) {
+  const { thread, shown } = entry;
+  const panel = `event-${thread.id}`;
+  return <article className="evidence-card event-card">
+    <button id={`event-toggle-${thread.id}`} className="event-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? panel : undefined}>
+      <span>
+        <span className="event-kicker"><Layers size={14} aria-hidden="true"/>{eventSummary(threadStats(thread))}{shown.length < thread.stories.length && <span className="event-match"> · {shown.length} of {thread.stories.length} match</span>}</span>
+        <strong>{thread.title}</strong>
+      </span>
+      <ChevronDown size={17} className={expanded ? 'rotated' : ''}/>
+    </button>
+    {expanded && <div className="event-members" id={panel}>
+      {shown.map(story => <EvidenceCard key={story.id} item={story} dated expanded={openStory === story.id} onToggle={() => onToggleStory(story.id)}/>)}
+    </div>}
+  </article>;
+}
+
+function Stat({ value, one, many }: { value: number; one: string; many: string }) {
+  return <span><strong>{value.toLocaleString('en')}</strong> {value === 1 ? one : many}</span>;
 }
 
 function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, onBrowseAll, onReturnToStory, onRetry }: {
@@ -663,15 +758,61 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
   onRetry: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  // Explicit expand/collapse choices per event; until one is made, events are collapsed, or open while searching.
+  const [eventOpen, setEventOpen] = useState<Record<string, boolean>>({});
+  const [reveal, setReveal] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(20);
+  const term = query.trim().toLowerCase();
   const currentStory = evidence.find(item => item.id === storyId);
-  const filtered = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return evidence.filter(story => !term || [story.title, ...story.articles.map(article => article.title + ' ' + article.source)].some(value => value.toLowerCase().includes(term)))
-      .sort((left, right) => right.articles.length - left.articles.length || (right.publication_date ?? '').localeCompare(left.publication_date ?? ''));
-  }, [evidence, query]);
-  const stories = currentStory ? [currentStory] : filtered.slice(0, limit);
+  const threads = useMemo(() => eventThreads(evidence), [evidence]);
+  const currentThread = currentStory?.thread_id ? threads.get(currentStory.thread_id) : undefined;
+  const totals = useMemo(() => ({
+    articles: evidence.reduce((sum, story) => sum + story.articles.length, 0),
+    linked: [...threads.values()].reduce((sum, thread) => sum + thread.stories.length, 0),
+  }), [evidence, threads]);
+  // Events come first (most reports, then most articles), then single stories (most articles). A search keeps an event if any member matches.
+  const entries = useMemo(() => {
+    const events: EvidenceEntry[] = [];
+    const singles: EvidenceEntry[] = [];
+    for (const thread of threads.values()) {
+      const shown = thread.stories.filter(story => storyMatches(story, term));
+      if (shown.length) events.push({ kind: 'event', thread, shown, weight: thread.stories.length * 10_000 + thread.stories.reduce((sum, story) => sum + story.articles.length, 0), date: thread.stories[thread.stories.length - 1].publication_date ?? '' });
+    }
+    for (const story of evidence) {
+      if (story.thread_id && threads.has(story.thread_id)) continue;
+      if (storyMatches(story, term)) singles.push({ kind: 'story', story, weight: story.articles.length, date: story.publication_date ?? '' });
+    }
+    const byWeight = (left: EvidenceEntry, right: EvidenceEntry) => right.weight - left.weight || right.date.localeCompare(left.date);
+    return [...events.sort(byWeight), ...singles.sort(byWeight)];
+  }, [evidence, threads, term]);
+  const visible = entries.slice(0, limit);
+  const eventExpanded = (id: string) => eventOpen[id] ?? term !== '';
+
+  // "Browse all evidence" from one story lands back on that story, with its event expanded.
+  function browseAll() {
+    if (currentStory) {
+      if (term && !storyMatches(currentStory, term)) setQuery('');
+      if (currentThread) setEventOpen(value => ({ ...value, [currentThread.id]: true }));
+      setOpen(currentStory.id);
+      setReveal(currentStory.id);
+    }
+    onBrowseAll();
+  }
+  useEffect(() => {
+    if (!reveal || currentStory) return;
+    const index = entries.findIndex(entry => entry.kind === 'story' ? entry.story.id === reveal : entry.shown.some(story => story.id === reveal));
+    if (index < 0) { setReveal(null); return; }
+    if (index >= limit) { setLimit(index + 1); return; }
+    // The parent focuses the heading in this same commit; move focus on to the story afterwards.
+    const timer = window.setTimeout(() => { document.getElementById(`evidence-story-${reveal}`)?.focus(); setReveal(null); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [reveal, currentStory, entries, limit]);
+
+  const mergedNote = [
+    totals.articles > evidence.length && `${count(totals.articles, 'article')} merged into ${count(evidence.length, 'story', 'stories')}.`,
+    threads.size > 0 && `${count(totals.linked, 'story', 'stories')} grouped into ${count(threads.size, 'event')}.`,
+  ].filter(Boolean).join(' ');
 
   return <div className="data-view">
     <div className="data-heading">
@@ -684,53 +825,41 @@ function EvidenceView({ evidence, facts, loading, error, headingRef, storyId, on
         <button className="retry-audio" onClick={onRetry}><RotateCw size={14}/> Retry loading evidence</button>
       </div> : evidence.length === 0 ? <EmptyRow text="There are no prepared stories to inspect yet."/> : <>
         {currentStory ?
-          <div className="evidence-actions">
-            <button className="source-toggle" onClick={onReturnToStory}>Back to briefing story</button>
-            <button className="source-toggle" onClick={onBrowseAll}>Browse all evidence</button>
-          </div> :
+          <>
+            <div className="evidence-actions">
+              <button className="source-toggle" onClick={onReturnToStory}>Back to briefing story</button>
+              <button className="source-toggle" onClick={browseAll}>Browse all evidence</button>
+            </div>
+            {currentThread && <p className="event-context"><Layers size={14} aria-hidden="true"/><span><span>{eventSummary(threadStats(currentThread), 'Part of an event')}</span><strong>{currentThread.title}</strong></span></p>}
+          </> :
           <>
             <div className="evidence-summary">
-              <span><strong>{evidence.length}</strong> story clusters</span>
-              <span><strong>{facts.length}</strong> extracted claims</span>
+              <Stat value={evidence.length} one="story" many="stories"/>
+              {threads.size > 0 && <Stat value={threads.size} one="event" many="events"/>}
+              <Stat value={totals.articles} one="article" many="articles"/>
+              <Stat value={facts.length} one="extracted claim" many="extracted claims"/>
             </div>
+            {mergedNote && <p className="evidence-note">{mergedNote}</p>}
             {evidence.length > 1 && <label className="evidence-search">Find a story or publisher
               <input type="search" value={query} onChange={event => { setQuery(event.target.value); setLimit(20); }}/>
             </label>}
-            {filtered.length === 0 && <EmptyRow text="No stories match your search."/>}
+            {entries.length === 0 && <EmptyRow text="No stories match your search."/>}
           </>}
-        {stories.map(item => {
-          const expanded = Boolean(currentStory) || open === item.id;
-          return <article className="evidence-card" key={item.id}>
-            {currentStory ?
-              <h3 className="evidence-title"><strong>{item.title}</strong></h3> :
-              <button className="evidence-title" onClick={() => setOpen(expanded ? null : item.id)} aria-expanded={expanded}>
-                <span><span className="evidence-count">{item.articles.length} {item.articles.length === 1 ? 'source' : 'sources'}</span><strong>{item.title}</strong></span>
-                <ChevronDown size={17} className={expanded ? 'rotated' : ''}/>
-              </button>}
-            {expanded && <div className="evidence-detail">
-              <div className="evidence-sources">
-                {item.articles.map(article => <a key={article.article_id} href={article.url} target="_blank" rel="noreferrer">
-                  <span>{article.source}</span><strong>{article.title}</strong><span>Open source ↗</span>
-                </a>)}
-              </div>
-              {item.facts.length > 0 && <div className="fact-list">
-                <span className="section-kicker">Extracted claims</span>
-                {item.facts.map(fact => <div className="fact" key={fact.id}>
-                  <span className={['conflict', 'unresolved', 'needs_review'].includes(fact.conflict_status) ? 'fact-dot conflict' : 'fact-dot'}/>
-                  <div><p>{fact.statement}</p>{(fact.value || fact.unit) && <span>{fact.value} {fact.unit}</span>}{fact.evidence && <blockquote>“{fact.evidence}”</blockquote>}</div>
-                </div>)}
-              </div>}
-            </div>}
-          </article>;
-        })}
-        {!currentStory && filtered.length > limit && <button className="retry-audio more-evidence" onClick={() => setLimit(value => value + 20)}>
-          Show more stories ({limit} of {filtered.length})
+        {currentStory ?
+          <EvidenceCard item={currentStory} single expanded/> :
+          visible.map(entry => entry.kind === 'story' ?
+            <EvidenceCard key={entry.story.id} item={entry.story} expanded={open === entry.story.id} onToggle={() => setOpen(open === entry.story.id ? null : entry.story.id)}/> :
+            <EventGroup key={entry.thread.id} entry={entry} expanded={eventExpanded(entry.thread.id)} openStory={open}
+              onToggle={() => setEventOpen(value => ({ ...value, [entry.thread.id]: !eventExpanded(entry.thread.id) }))}
+              onToggleStory={id => setOpen(open === id ? null : id)}/>)}
+        {!currentStory && entries.length > limit && <button className="retry-audio more-evidence" onClick={() => setLimit(value => value + 20)}>
+          Show more ({limit} of {entries.length.toLocaleString('en')})
         </button>}
       </>}
   </div>;
 }
 function CostsView({ costs, loading }: { costs: Costs | null; loading: boolean }) {
-  return <div className="data-view"><div className="data-heading"><h2>What does it cost?</h2><p>Provider usage and estimated costs for preparing stories and producing briefings.</p></div>{loading ? <LoadingRow/> : !costs ? <EmptyRow text="Cost estimates are not available right now."/> : <><div className="cost-hero"><span>Estimated cost per briefing</span><strong>{money(costs.per_briefing_usd)}</strong><span>average provider cost</span></div><div className="cost-table-wrap"><table className="cost-table"><thead><tr><th>Stage</th><th>Calls</th><th>Tokens / chars</th><th>Est. cost</th></tr></thead><tbody>{costs.stages.map((s, i) => <tr key={`${s.stage}-${i}`}><td>{s.stage}</td><td>{s.calls}</td><td>{s.input_tokens + s.output_tokens > 0 ? `${(s.input_tokens + s.output_tokens).toLocaleString()} tokens` : `${s.characters.toLocaleString()} chars`}</td><td>{money(s.estimated_usd)}</td></tr>)}</tbody><tfoot><tr><td colSpan={3}>Per briefing total</td><td>{money(costs.per_briefing_usd)}</td></tr></tfoot></table></div><div className="cost-notes"><div><span>Preparation</span><strong>{money(costs.preparation_usd)}</strong><p>Preparation across {costs.article_count.toLocaleString()} articles.</p></div><div><span>At 10x article volume</span><strong>{money(costs.ten_x_preparation_usd)}</strong><p>Projected preparation cost at ten times the article volume.</p></div></div><div className="cost-footnote"><Info size={14}/><span>Speech calls count newly synthesized clips. Briefings can reuse them. Mode: {costs.mode}.</span></div></>}</div>;
+  return <div className="data-view"><div className="data-heading"><h2>What does it cost?</h2><p>Provider usage and estimated costs for preparing stories and producing briefings.</p></div>{loading ? <LoadingRow/> : !costs ? <EmptyRow text="Cost estimates are not available right now."/> : <><div className="cost-hero"><span>Estimated cost per briefing so far</span><strong>{money(costs.per_briefing_usd)}</strong><span>average on this server; it falls as listeners share rendered stories</span></div><div className="cost-table-wrap"><table className="cost-table"><thead><tr><th>Stage</th><th>Calls</th><th>Tokens / chars</th><th>Est. cost</th></tr></thead><tbody>{costs.stages.map((s, i) => <tr key={`${s.stage}-${i}`}><td>{s.stage}</td><td>{s.calls}</td><td>{s.input_tokens + s.output_tokens > 0 ? `${(s.input_tokens + s.output_tokens).toLocaleString()} tokens` : `${s.characters.toLocaleString()} chars`}</td><td>{money(s.estimated_usd)}</td></tr>)}</tbody><tfoot><tr><td colSpan={3}>Per briefing total</td><td>{money(costs.per_briefing_usd)}</td></tr></tfoot></table></div><div className="cost-notes"><div><span>Preparation</span><strong>{money(costs.preparation_usd)}</strong><p>Preparation across {costs.article_count.toLocaleString()} articles.</p></div><div><span>At 10x article volume</span><strong>{money(costs.ten_x_preparation_usd)}</strong><p>Projected preparation cost at ten times the article volume.</p></div></div><div className="cost-footnote"><Info size={14}/><span>Each story is rendered once per voice and language and reused by every listener who gets it, so the first briefings carry the cost and later ones add little. Speech calls count newly synthesized clips. Mode: {costs.mode}.</span></div></>}</div>;
 }
 // The signature: one thin winding line, drawn once on load, that leads from the headline into the briefing.
 // It uses the same 2px line and arrowhead as the connectors in Linked Traces.

@@ -4,11 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import operator
 import os
 import re
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -33,7 +36,7 @@ def fixture_articles() -> list[dict[str, Any]]:
     ]
 
 
-_UNIT_PATTERN = r"(?:per\s+megawatt[- ]hour|basis\s+points?|basispunkte|basispunten|basispunkt|basispunt|million\s+crowns?|miljoen\s+kronen|millionen\s+kronen|milliarden\s+euro|miljard\s+euro|megawatt[- ]hours?|megawatts?|applications?|anträge|aanvragen|billion|million|bn|mn|percent|per\s+cent|prozent|procent|%|milliarden|milliarde|millionen|miljard|miljoen|crowns?|kronen|euro|euros|eur|workers?|jobs?|hours?|days?|years?|meetings?)"
+_UNIT_PATTERN = r"(?:per\s+megawatt[- ]hour|basis\s+points?|bps\b|basispunkte|basispunten|basispunkt|basispunt|million\s+crowns?|miljoen\s+kronen|millionen\s+kronen|milliarden\s+euro|miljard\s+euro|megawatt[- ]hours?|megawatts?|applications?|anträge|aanvragen|billion|million|bn|mn|percent|per\s+cent|prozent|procent|%|milliarden|milliarde|millionen|miljard|miljoen|crowns?|kronen|euro|euros|eur|workers?|jobs?|hours?|days?|years?|meetings?)"
 _NUM = re.compile(rf"(?<![\w])(?:€\s*)?[−-]?\d+(?:[.,]\d+)*(?:\s*{_UNIT_PATTERN})?", re.I)
 _NUMBER = re.compile(r"[−-]?\d+(?:[.,]\d+)*")
 _WORDS = re.compile(r"\b(?:revenue|sales|turnover|umsatz|omzet|profit|winst|gewinn|rate|policy rate|inflation|percent|per cent|billion|million|miljard|milliarden|miljoen|millionen|growth|forecast|prognose|groeiverwachting|wachstumsprognose|exports?|exporte?|export|jobs?|arbeitsplätze|banen|budget|grant|applications?|anträge|aanvragen|workers?|arbeitnehmer|werknemers|wage|pay rise|lohn|loon|prices?|preise|prijzen|prices?|energy|energie|capacity|megawatts?|receipt|receipts|nächtigungen|stays|loans?|krediet|kredite|overdue|überfällig|tourism|tourismus|toerisme|investment|investition|industrie|household|haushalt|huishouden|saving|savings|sparen|rates?|rente|leitzins|policy rate|basis points?|basispunkte|basispunten|crown|crowns|million|billion|percent|prozent|procent)\b", re.I)
@@ -235,8 +238,58 @@ def _novelty_values(stories: list[dict[str, Any]]) -> dict[str, float]:
     return result
 
 
+# Stock picks and buy or sell calls are advice, not news; a briefing informs and never recommends a trade.
+# The gate is deliberately wide: withholding a news story costs one story, reading out a recommendation costs
+# the listener's trust. A third of the event corpus is stock-pick content from one investment publisher.
+_ADVICE_HEADLINE = re.compile("|".join((
+    # A numbered list of picks: "3 ... Funds to ...", "4 ... Stocks Likely to ...", "Top 5 Dividend Picks"
+    r"^\W*(?:top\s+)?\d+\s+(?:[\w&'’.-]+\s+){0,5}?(?:stocks?|funds?|etfs?|picks?|providers|plays)\b",
+    r"\b(?:stocks?|shares?|funds?|etfs?|picks?|providers)\s+(?:to|in|for)\s+"
+    r"(?:buy|sell|own|watch|avoid|consider|invest|explore|gain|add|keep|bet|play|focus|your)\b",
+    r"\bto\s+buy\s+(?:now|today|for)\b|\bbuy\s+or\s+sell\b|\b(?:buy|sell)\s+or\s+hold\b|\bbuy\s+now\b(?!,?\s+pay)",
+    r"\bstrong\s+(?:buy|sell|pick|(?:mutual\s+|bond\s+|index\s+)?fund|etf|(?:momentum|value|growth|dividend|income)\s+stock)\b",
+    r"\bshould\s+you\s+(?:still\s+)?(?:buy|sell|invest|hold|own|bet)\b|\bshould\s+investors\b",
+    r"\bbull\s+of\s+the\s+day\b|\bbear\s+of\s+the\s+day\b|\btop[- ]ranked\b|\bmust[- ]buy\b",
+    r"\byour\s+(?:portfolio|(?:investing\s+)?radar|watch\s?list|short\s?list|research\s+list)\b",
+    r"\b(?:stock|fund|etf|momentum|value|growth|dividend|income)\s+picks?\b|\btop\s+(?:stock\s+)?picks?\b|\bgreat\s+choice\b",
+    r"\bright\s+now\s*\?|\bhow\s+to\s+invest\b|^\W*(?:invest\s+in|buy\s+(?!now,?\s+pay))\w",
+    r"\bbetter\s+(?:investment|buy|bet|stock|pick|choice)\b|\bhas\s+the\s+edge\b",
+    r"\bwhich\s+(?:[\w&'’-]+\s+){0,4}(?:stock|fund|etf|bet|investment)\b",
+    # Round-ups of an investment publisher's own picks, and trading signals.
+    r"\bzacks\b|\btop\s+(?:stock|research|analyst)\s+reports?\b|\bguide\s+to\b.*\b(?:etfs?|funds?|stocks?)\b",
+    r"\bimplied\s+volatility\s+surging\b|\boptions\s+traders\s+betting\b|\bbargain\s+stocks?\b|\b(?:watchlist|momentum)\s+stocks?\b",
+    r"\b(?:up|down)graded?\s+to\b|\broom\s+to\s+run\b|\bcan\s+the\s+run\s+continue\b|\bto\s+gain\s*\?",
+    r"\bsignals?\s*:|\b(?:trading|forex)\s+signals?\b|\bprice\s+(?:prediction|forecast|analysis|targets?)\b|\b(?:golden|death)\s+cross\b",
+    r"\bdon['’]?t\s+overlook\b|\bthese\s+\d+\s|\bthese\s+(?:etfs?|stocks?|funds?)\b|\bbuying\s+opportunity\b|\b(?:buy|sell|hold)['’\"”]?\s+rating\b|\bfor\s+(?:\w+\s+)?investors\s*\?",
+    r"\b(?:aktien|aandelen)\s+(?:zum\s+kaufen|om\s+te\s+kopen)\b|\bkaufempfehlung\b|\bkoopadvies\b",
+)), re.I)
+
+# A rating, a rank or a price target is someone's recommendation even inside a news report, and a chart
+# level (support, resistance, a "demand zone") is a trader's reading, not a reported fact: never read out.
+_ADVICE_FIGURE = re.compile(
+    r"\b(?:zacks\s+rank|vgm\s+score|(?:value|growth|momentum|style)\s+score|price\s+targets?|target\s+price|"
+    r"strong\s+(?:buy|sell)|(?:buy|sell|hold|outperform|underperform|overweight|underweight|neutral)\s+"
+    r"(?:rating|recommendation)|rated?\s+(?:a\s+)?(?:buy|sell|hold)|kursziel|koersdoel|"
+    r"(?:support|resistance)\s+(?:levels?|zones?|lines?|at|near|around)|(?:key|major|primary|strong|immediate|next)\s+"
+    r"(?:support|resistance)|(?:demand|supply)\s+zone|psychological\s+(?:level|mark|barrier)|"
+    r"stop[- ]loss|take[- ]profit|(?:golden|death)\s+cross|fibonacci|retracement|"
+    r"unterstützungs(?:zone|niveau|marke)|widerstands(?:zone|niveau|marke)|steunniveau|weerstandsniveau)\b", re.I)
+
+
+def is_investment_advice(story: dict[str, Any]) -> bool:
+    return bool(_ADVICE_HEADLINE.search(str(story.get("title", ""))))
+
+
+def is_advice_figure(fact: dict[str, Any]) -> bool:
+    # The name is checked in every language it will be spoken in.
+    names = " ".join(str(name) for name in (fact.get("measure_translations") or {}).values())
+    return bool(_ADVICE_FIGURE.search(f"{fact.get('measure') or ''} {names} {fact.get('evidence') or ''}"))
+
+
 def _trust_eligible(story: dict[str, Any]) -> tuple[bool, str]:
     facts = story.get("facts", [])
+    if is_investment_advice(story):
+        return False, "investment advice, not news"
     articles = {str(article.get("article_id", "")): article for article in story.get("articles", [])}
     if not facts:
         return False, "no sourced facts"
@@ -264,8 +317,12 @@ def _trust_eligible(story: dict[str, Any]) -> tuple[bool, str]:
 
 
 def _provider_batches(groups: list[list[dict[str, Any]]]):
-    """Bound each external extraction request by articles and characters."""
-    article_limit = max(1, int(os.getenv("BRIEFING_LIVE_BATCH_ARTICLES", "24")))
+    """Bound each external extraction request by articles and characters.
+
+    One article per request by default: given several long articles at once, the model returned facts for
+    only a few of them. Requests run in parallel, so the import is not slower.
+    """
+    article_limit = max(1, int(os.getenv("BRIEFING_LIVE_BATCH_ARTICLES", "1")))
     char_limit = max(4000, int(os.getenv("BRIEFING_LIVE_BATCH_CHARS", "48000")))
     article_body_limit = max(1000, int(os.getenv("BRIEFING_LIVE_ARTICLE_CHARS", "10000")))
     batch: list[dict[str, Any]] = []
@@ -365,12 +422,22 @@ def _canonical_unit(unit: str) -> str:
         "bn": "billion", "mn": "million", "euros": "euro", "eur": "euro",
         "crowns": "crown", "kronen": "crown", "worker": "workers", "job": "jobs",
         "megawatt hour": "megawatt-hour", "per megawatt hour": "per megawatt-hour",
-        "basis point": "basis points",
+        "basis point": "basis points", "bps": "basis points",
         "million crowns": "million crown", "million crown": "million crown",
         "millionen kronen": "million crown", "miljoen kronen": "million crown",
         "milliarden euro": "billion euro", "miljard euro": "billion euro",
     }
     return aliases.get(value, value)
+
+
+_CURRENCY_WORDS = re.compile(
+    r"(?:us\s*dollars?|u\.s\.\s*dollars?|dollars?|usd|euros?|eur|pounds?(?:\s+sterling)?|gbp|yen|jpy|yuan|cny|rmb|"
+    r"francs?|chf|cad|aud|nzd|[$€£¥]|us\$|a\$|c\$)", re.I)
+
+
+def _without_currency(unit: str) -> str:
+    """A canonical unit with currency names and symbols removed: "billion dollars" and "billion" agree."""
+    return _canonical_unit(" ".join(_CURRENCY_WORDS.sub(" ", str(unit)).split()))
 
 
 def _value_unit(value: str, unit: str = "", language: str = "en") -> tuple[str, str]:
@@ -394,19 +461,95 @@ def _locate_evidence(body: str, evidence: str, value: str) -> tuple[int, str]:
     if at >= 0:
         return at, evidence
     number = _NUMBER.search(str(value).lstrip("-−"))
-    figure_end = evidence.find(number.group(0)) + len(number.group(0)) if number and number.group(0) in evidence else -1
-    if figure_end < 0:
+    if not number:
         return -1, ""
-    lowered = body.lower()
-    candidate = evidence.rstrip(".,;:!? ")
-    while len(candidate) >= max(figure_end, 24):
-        at = lowered.find(candidate.lower())
-        if at >= 0:
-            return at, body[at:at + len(evidence)]
-        if " " not in candidate[figure_end:]:
-            break
-        candidate = candidate.rsplit(" ", 1)[0].rstrip(".,;:!? ")
+    # Compare with typographic variants folded (curly quotes, dashes, non-breaking and repeated spaces),
+    # mapping every match back to the article's own characters.
+    folded_body, positions = _folded(body)
+    folded_evidence = _folded(evidence)[0]
+    figure_end = folded_evidence.find(number.group(0)) + len(number.group(0)) if number.group(0) in folded_evidence else -1
+    if figure_end >= 0:
+        candidate = folded_evidence.rstrip(".,;:!? ")
+        while len(candidate) >= max(figure_end, 24):
+            at = folded_body.find(candidate)
+            if at >= 0:
+                start = positions[at]
+                end = positions[min(at + len(folded_evidence), len(positions)) - 1] + 1
+                return start, body[start:end]
+            if " " not in candidate[figure_end:]:
+                break
+            candidate = candidate.rsplit(" ", 1)[0].rstrip(".,;:!? ")
+    # The quote joins or rewords clauses: cite the article's own sentence that prints the figure and
+    # shares most of the quote's content words. The caller still requires the value and unit in it.
+    wanted = set(re.findall(r"[a-zà-ÿ]{4,}", folded_evidence))
+    if len(wanted) < 3:
+        return -1, ""
+    best: tuple[float, int, int] | None = None
+    for match in re.finditer(rf"(?<![\d.,]){re.escape(number.group(0))}(?![\d]|[.,]\d)", body):
+        left, right = _sentence_bounds(body, match.start())
+        overlap = len(wanted & set(re.findall(r"[a-zà-ÿ]{4,}", _folded(body[left:right])[0]))) / len(wanted)
+        if overlap >= 0.6 and (best is None or overlap > best[0]):
+            best = (overlap, left, right)
+    if best:
+        sentence = body[best[1]:best[2]]
+        return best[1] + len(sentence) - len(sentence.lstrip()), sentence.strip()
     return -1, ""
+
+
+_MEASURE_FILLER = frozenset("the a an of for in on at to and or per by with from its their this that "
+                            "der die das des dem den ein eine von für im in am an zu und oder pro mit "
+                            "de het een van voor op te en of per met".split())
+_ADVICE_WORDS = re.compile(r"\b(?:buy|sell|should|recommend\w*|kaufen|verkaufen|kopen|verkopen)\b", re.I)
+
+
+def _grounded_measure(measure: str, sentence: str, article: str = "") -> str:
+    """The model's name for what a figure measures, kept only if the article itself says it.
+
+    Every content word must appear in the article (allowing an inflected ending), and at least half of them
+    in the sentence that prints the figure, so the name is built from the source's own words and anchored
+    where the figure is. A subject named a sentence earlier ("Japan" for "Exports accelerated to 20.5%")
+    is allowed; a word the article never uses is not. A name with digits, advice wording, or the wrong
+    length is dropped; the figure is then named by rule or not at all.
+    """
+    measure = " ".join(measure.replace("’", "'").split()).strip(" .,:;")
+    words = re.findall(r"[^\W\d_]+(?:['-][^\W\d_]+)*", measure)
+    if not 1 <= len(words) <= 7 or len(measure) > 64 or re.search(r"\d", measure) or _ADVICE_WORDS.search(measure):
+        return ""
+    content = [word for word in words if word.lower() not in _MEASURE_FILLER]
+    if not content:
+        return ""
+    near, whole = _folded(sentence)[0], _folded(article)[0] if article else ""
+    anchored = 0
+    for word in content:
+        stem = rf"(?<![^\W\d_]){re.escape(word.lower()[:max(4, len(word) - 2)])}"
+        if re.search(stem, near):
+            anchored += 1
+        elif not re.search(stem, whole):
+            return ""
+    return measure if anchored * 2 >= len(content) else ""
+
+
+_FOLD = {"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"',
+         "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "−": "-", " ": " ",
+         " ": " ", " ": " "}
+
+
+@lru_cache(maxsize=256)
+def _folded(text: str) -> tuple[str, tuple[int, ...]]:
+    """Lower-case text with typographic variants and runs of whitespace folded, plus each character's origin."""
+    characters, positions, spaced = [], [], False
+    for index, character in enumerate(text):
+        character = _FOLD.get(character, character)
+        if character.isspace():
+            if spaced:
+                continue
+            character, spaced = " ", True
+        else:
+            spaced = False
+        lowered = character.lower()
+        characters.append(lowered if len(lowered) == 1 else character)
+        positions.append(index)
+    return "".join(characters), tuple(positions)
 
 
 def _fact_id(article_id: str, evidence: str, value: str, unit: str = "", language: str = "en") -> str:
@@ -594,7 +737,18 @@ def _extract_batch(providers: Any, batch: list[dict[str, Any]], heuristic_ids: s
     provider error (authentication, connection, quota) propagates unchanged and aborts the run.
     """
     try:
-        return (providers.extract(batch) or {}).get("stories", [])
+        reply = providers.extract(batch) or {}
+        stories = list(reply.get("stories", []))
+        answered = reply.get("answered")
+        if isinstance(answered, list) and len(batch) > 1:
+            # The reply must cover every article; ask again for any it left out.
+            missing = [article for article in batch if str(article.get("article_id", "")) not in set(map(str, answered))]
+            if missing and len(missing) < len(batch):
+                stories += _extract_batch(providers, missing, heuristic_ids)
+            elif missing:
+                for article in missing:
+                    stories += _extract_batch(providers, [article], heuristic_ids)
+        return stories
     except RECOVERABLE_EXTRACTION_ERRORS as exc:
         if len(batch) == 1:
             _LOG.warning("Live extraction reply unusable for 1 article (%s); using the local heuristic for it",
@@ -627,8 +781,23 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
         groups, vectors_by_article = _merge_same_event(group_articles(articles, _group_key, _day), providers)
         extracted_stories = []
         try:
-            for batch in _provider_batches(groups):
-                extracted_stories.extend(_extract_batch(providers, batch, heuristic_ids))
+            batches = list(_provider_batches(groups))
+            workers = min(len(batches), max(1, int(os.getenv("BRIEFING_LIVE_CONCURRENCY", "8"))))
+            if workers <= 1:
+                for batch in batches:
+                    extracted_stories.extend(_extract_batch(providers, batch, heuristic_ids))
+            else:
+                # Requests are independent, so they run side by side; results keep the batch order. The
+                # first provider failure (authentication, network, quota) stops the rest and aborts.
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = [pool.submit(_extract_batch, providers, batch, heuristic_ids) for batch in batches]
+                    try:
+                        for future in futures:
+                            extracted_stories.extend(future.result())
+                    except BaseException:
+                        for future in futures:
+                            future.cancel()
+                        raise
         except Exception:
             # Keep the corpus usable if an opted-in provider call fails midway;
             # local extraction still enforces evidence and numeric provenance.
@@ -675,7 +844,19 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
             # Values and units must occur together in the cited span. A nearby
             # unrelated number elsewhere in the sentence cannot validate it.
             if quantity not in evidence_quantities:
-                continue
+                # The model often names the currency ("billion dollars" for "$3.3 billion"). Accept the
+                # figure when the units agree apart from currency words, and keep the unit as printed.
+                # It may also put the scale in the value ("800 million" with unit "shares"); the printed
+                # scale next to the number is what counts.
+                embedded = _value_unit(value, "", language)[1]
+                claimed = {_without_currency(quantity[1]), _without_currency(embedded),
+                           _without_currency(f"{embedded} {unit}")} if embedded else {_without_currency(quantity[1])}
+                printed = next((observed for amount, observed in sorted(evidence_quantities)
+                                if amount == quantity[0] and _without_currency(observed) in claimed
+                                and (observed or not embedded)), None)
+                if printed is None:
+                    continue
+                quantity = (quantity[0], printed)
             value_number = _NUMBER.search(value)
             evidence_number_at = evidence.find(value_number.group(0)) if value_number else -1
             if evidence_number_at < 0:
@@ -685,7 +866,12 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
             sentence = body[sentence_left:sentence_right].strip()
             short_evidence = _short_evidence(body, evidence_offset + evidence_number_at, number_start, number_start + len(value_number.group(0)))
             fact = {"id": _fact_id(aid, short_evidence, value, unit, language), "statement": short_evidence, "value": value_number.group(0), "unit": quantity[1], "evidence": short_evidence, "article_id": aid, "language": language, "source_sentence_hash": _sentence_hash(sentence), "conflict_status": "supported", "_claim_group": (aid, sentence_left)}
-            if all(existing["id"] != fact["id"] for existing in facts):
+            if measure := _grounded_measure(str(raw.get("measure", "")), sentence, f"{article.get('title', '')} {body}"):
+                fact["measure"] = measure
+            # The same figure quoted twice from one sentence is one fact.
+            repeated = any(existing["value"] == fact["value"] and existing["unit"] == fact["unit"]
+                           and existing["source_sentence_hash"] == fact["source_sentence_hash"] for existing in facts)
+            if not repeated and all(existing["id"] != fact["id"] for existing in facts):
                 facts.append(fact)
         if not facts: continue
         cited_ids = {f["article_id"] for f in facts}
@@ -696,6 +882,8 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
         if story_id not in clustered:
             clustered[story_id] = {"id": story_id, "title": str(item.get("title", "Untitled")), "articles": refs, "facts": [], "topics": [], "publication_date": day, "conflicts": []}
         story = clustered[story_id]
+        if item.get("own_title"):
+            story["_own_title"] = True
         known_facts = {fact["id"] for fact in story["facts"]}
         story["facts"].extend(fact for fact in facts if fact["id"] not in known_facts)
         known_articles = {article["article_id"] for article in story["articles"]}
@@ -707,6 +895,12 @@ def prepare(articles: list[dict[str, Any]], providers: Any) -> list[dict[str, An
     # with the claims so narration and evidence views can surface it.
     for story in stories:
         story["conflicts"] = _label_conflicts(story["facts"])
+        if story.pop("_own_title", False):
+            # Built from per-article replies: the story is headed by its English edition's own headline.
+            lead = next((a for a in story["articles"] if a.get("language") == "en"), story["articles"][0])
+            story["title"] = str(lead.get("title") or story["title"])
+            if not story["topics"]:
+                story["topics"] = ["news"]
     if not stories:
         _note_heuristic_articles(providers, len(articles))
         return _offline_extract(articles)
@@ -756,21 +950,32 @@ def _merge_same_event(groups: list[list[dict[str, Any]]], providers: Any) -> tup
 DIVERSITY_SIMILARITY = 0.80
 
 
-def diversify(stories: list[dict[str, Any]], threshold: float = DIVERSITY_SIMILARITY) -> list[dict[str, Any]]:
+def diversify(stories: list[dict[str, Any]], threshold: float = DIVERSITY_SIMILARITY,
+              limit: int | None = None) -> list[dict[str, Any]]:
     """Keep ranking order but pass over a near-twin of a story already chosen, and over a further story
     of an event thread already represented (one development of an event per briefing).
 
-    Stories without embeddings (offline mode) are never passed over as near-twins.
+    Stories without embeddings (offline mode) are never passed over as near-twins. ``limit`` stops once
+    that many stories are kept: a briefing needs a handful, and comparing a whole ranked corpus pairwise
+    took over half a minute per briefing on 1,358 embedded stories.
     """
     kept: list[dict[str, Any]] = []
+    vectors: list[tuple[list[float], float]] = []
     threads: set[str] = set()
     for story in stories:
+        if limit is not None and len(kept) >= limit:
+            break
         thread = story.get("thread_id")
         if thread and thread in threads:
             continue
         vector = story.get("embedding")
-        if vector and any(cosine(vector, other["embedding"]) >= threshold for other in kept if other.get("embedding")):
-            continue
+        if vector:
+            norm = math.sqrt(sum(map(operator.mul, vector, vector)))
+            if norm and any(len(other) == len(vector) and sum(map(operator.mul, vector, other)) >= threshold * norm * other_norm
+                            for other, other_norm in vectors):
+                continue
+            if norm:
+                vectors.append((vector, norm))
         kept.append(story)
         if thread:
             threads.add(thread)
@@ -839,6 +1044,16 @@ def _unspoken_story(story: dict[str, Any], spoken: set[str]) -> dict[str, Any]:
     return {**story, "facts": facts, "conflicts": conflicts}
 
 
+def _importance(story: dict[str, Any], thread_size: int) -> float:
+    """How widely a story was covered, from 0 (one outlet, no follow-ups) to 1.
+
+    A second outlet reporting the same event, and further reports of the same developing event, are the
+    importance signals this corpus carries. Translated editions of one outlet do not count.
+    """
+    outlets = {str(article.get("source", "")).split(" - ")[0].strip().casefold() for article in story.get("articles", [])}
+    return min(1.0, 0.5 * max(0, len(outlets) - 1) + 0.1 * max(0, thread_size - 1))
+
+
 @dataclass(frozen=True)
 class _StoryFeatures:
     story: dict[str, Any]
@@ -849,6 +1064,7 @@ class _StoryFeatures:
     recency: float
     novelty: float
     trust_reason: str
+    importance: float = 0.0
 
 
 def _story_features(
@@ -871,6 +1087,7 @@ def _story_features(
     }
     vocabulary = {axis: patterns for axis, patterns in vocabulary.items() if patterns}
     axes = weight_axes | exclusion_axes
+    thread_sizes = Counter(story["thread_id"] for story in sourced if story.get("thread_id"))
     rows = []
     for story in sourced:
         if not _matches_region(story, region):
@@ -893,6 +1110,7 @@ def _story_features(
             story, {axis for axis in axes if _matches_topic(axis, topics)},
             {axis for axis in axes if _matches_topic(axis, about)}, relevance, mentions,
             _recency(story, reference_day), novelty.get(story["id"], 0.0), trust_reason,
+            _importance(story, thread_sizes.get(story.get("thread_id"), 1)),
         ))
     return rows, set(vocabulary)
 
@@ -945,8 +1163,14 @@ def _rank_profile(
         for axis, weight in relevance_weights:
             weighted_hits += feature.relevance[axis] * weight
         topic_match = min(1.0, matched_weight / topic_total) if topic_total else 0.0
+        # A story about one of a listener's interests is a match, however many interests they named: with
+        # the share of matched weight alone, a listener who chose three topics saw unrelated headline news
+        # outrank a story on any one of them. So the strongest matched interest counts on its own as well.
+        interest = max(weight for _, weight in matching) / max(weight for _, weight in weights) if matching else 0.0
         relevance = min(1.0, weighted_hits / relevance_total) if relevance_total else 0.0
-        score = 0.4 * topic_match + 0.3 * relevance + 0.2 * feature.recency + 0.1 * feature.novelty
+        # Coverage lifts the bigger story: one reported by several outlets, or part of a developing event.
+        score = (0.4 * topic_match + 0.25 * interest + 0.3 * relevance + 0.2 * feature.recency + 0.1 * feature.novelty
+                 + 0.1 * feature.importance)
         why = "Sourced recent story"
         # The reason claims a match only for topics the story is about. A passing mention, or words in
         # its figures that merely touch the interest, is reported as a mention.
@@ -1037,7 +1261,7 @@ def _verified_facts(story: dict[str, Any]) -> list[dict[str, Any]]:
     facts = []
     for fact in story.get("facts", []):
         article = articles.get(str(fact.get("article_id", "")))
-        if fact.get("id") and article and fact.get("evidence"):
+        if fact.get("id") and article and fact.get("evidence") and not is_advice_figure(fact):
             language = str(fact.get("language") or article.get("language", "en"))
             if _quantity_supported(fact, language):
                 facts.append(fact)
@@ -1076,7 +1300,7 @@ _MEASURE_LABELS = (
     (r"(?:operating )?profit|gewinn|winst", {"en": "profit", "de": "Gewinn", "nl": "winst"}),
     (r"growth forecast|wachstumsprognose|groeiverwachting", {"en": "growth forecast", "de": "Wachstumsprognose", "nl": "groeiverwachting"}),
     (r"policy rate|leitzins|beleidsrente", {"en": "policy rate", "de": "Leitzins", "nl": "beleidsrente"}),
-    (r"basis points?|basispunkte|basispunten|basispunkt|basispunt", {"en": "rate change", "de": "Zinsänderung", "nl": "renteverandering"}),
+    (r"basis points?|\d\s*bps\b|basispunkte|basispunten|basispunkt|basispunt", {"en": "rate change", "de": "Zinsänderung", "nl": "renteverandering"}),
     (r"inflati(?:on|e)|teuerung", {"en": "inflation", "de": "Inflation", "nl": "inflatie"}),
     (r"pay rise|wage|lohn|loon", {"en": "pay increase", "de": "Lohnerhöhung", "nl": "loonsverhoging"}),
     (r"jobs?|arbeitsplätze|banen", {"en": "jobs", "de": "Arbeitsplätze", "nl": "banen"}),
@@ -1178,7 +1402,7 @@ class _Amount(NamedTuple):
 class _Figure(NamedTuple):
     label: str | None  # None when the evidence names no measure for this figure
     unit: str  # canonical unit, completed from the evidence when the figure leaves it out
-    slot: tuple[int, bool] | None  # language-independent identity of the label: catalogue entry, previous value
+    slot: tuple[int | str, bool] | None  # identity of the label: catalogue entry or model-given name, previous value
     speakable: bool  # False when it cannot be said faithfully, so it is left out of the narration
 
 
@@ -1292,10 +1516,25 @@ def _owned_labels(text: str, amounts: list[_Amount]) -> dict[_Amount, int]:
     return {amount: found[1] for amount, found in best.items()}
 
 
+def _named_by_model(slot: Any) -> bool:
+    return bool(slot) and isinstance(slot[0], str) and slot[0].startswith("measure:")
+
+
 def _describe_figure(fact: dict[str, Any], source_language: str, language: str) -> _Figure:
-    return _describe_evidence(
+    figure = _describe_evidence(
         str(fact.get("evidence", "")), str(fact.get("value", "")), str(fact.get("unit", "")), source_language, language,
     )
+    # A name the extraction model built from the sentence's own words is more specific than the rule
+    # catalogue ("UK unemployment rate" rather than nothing). It is used in its own language, and in
+    # another language only through its checked translation (see translations.py). It is never used for the
+    # earlier value of a change, which the catalogue words as "previous ...". Either way the figure is the
+    # same measure, so both wordings share one slot.
+    measure = str(fact.get("measure") or "")
+    if measure and figure.speakable and not (figure.slot and figure.slot[1] is True):
+        name = measure if source_language == language else str((fact.get("measure_translations") or {}).get(language) or "")
+        if name:
+            return _Figure(name, figure.unit, ("measure:" + measure.casefold(), False), True)
+    return figure
 
 
 @lru_cache(maxsize=8192)
@@ -1435,6 +1674,7 @@ _MAX_SPOKEN_CLAIMS = 4
 # Figures read out without a measure name, only for a story in which no figure can be named.
 _UNNAMED_FIGURE_LIMIT = 3
 _UNNAMED_FIGURE = {"en": "The report gives {}.", "de": "Der Bericht nennt {}.", "nl": "Het bericht noemt {}."}
+_TIME_UNITS = frozenset({"years", "year", "days", "day", "hours", "hour", "meetings", "meeting"})
 
 _NARRATION_FRAMES = {
     "en": {"beginner": "In plain terms, here’s what the sources report.", "intermediate": "Here’s what the sources report.", "advanced": "Here are the reported measures."},
@@ -1517,6 +1757,7 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
     The recall is one sentence in ``refresher_text``; the story's ``text`` is the same with or without it.
     """
     result = []
+    entries: list[tuple[dict[str, Any], bool]] = []
     duration = max(1, int(profile.get("duration", 5) or 5))
     output_language = str(profile.get("language", "en")).lower()
     expertise = str(profile.get("expertise", "intermediate")).lower()
@@ -1547,7 +1788,17 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
             if not figure.speakable:
                 continue
             value = _value_unit(fact["value"], "", source_language)[0]
-            group = groups.setdefault((figure.slot, value, _unit_identity(figure.unit)), {
+            key = (figure.slot, value, _unit_identity(figure.unit))
+            if key not in groups:
+                # Another edition's fact for a figure already named from the listener's own language: the
+                # same value and unit in a translated article is that claim again, so it joins it as a citation
+                # instead of being read a second time under a differently worded name.
+                twins = [existing for existing, group in groups.items()
+                         if existing[1:] == key[1:] and group["source_language"] != source_language
+                         and (_named_by_model(existing[0]) or _named_by_model(figure.slot) or figure.slot is None)]
+                if len(twins) == 1:
+                    key = twins[0]
+            group = groups.setdefault(key, {
                 "fact": fact, "figure": figure, "source_language": source_language, "first": n, "members": [],
             })
             group["members"].append(fact)
@@ -1555,8 +1806,11 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
         # A figure whose evidence names no measure is not spoken under an invented label. Only when nothing
         # in the story can be named are the figures read out, with their units, as plain reports.
         candidates, limit = [g for g in groups.values() if g["figure"].label], _MAX_SPOKEN_CLAIMS
+        unnamed_only = not candidates
         if not candidates:
-            candidates, limit = list(groups.values()), _UNNAMED_FIGURE_LIMIT
+            # A bare duration or age ("10 years") says nothing without its measure, so it is never read out.
+            candidates = [g for g in groups.values() if str(g["figure"].unit).strip().lower() not in _TIME_UNITS]
+            limit = _UNNAMED_FIGURE_LIMIT
         if not candidates:
             continue
 
@@ -1565,8 +1819,21 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
             return (0 if conflicting else 1 if group["figure"].label and group["figure"].unit else 2, group["first"])
 
         # Conflicting values, then named figures with a unit. The choice depends only on the facts, so every
-        # language, expertise and angle of a prepared summary cites the same ones, in source order.
-        chosen = sorted(sorted(candidates, key=importance)[:limit], key=lambda group: group["first"])
+        # language, expertise and angle of a prepared summary cites the same ones, in source order. A name is
+        # heard at most twice per story (a value and its update, or two periods): a third "Rate change, ..."
+        # tells a listener nothing about what differs. Conflicting values always keep their name, because
+        # the conflict is the news.
+        picked, names = [], Counter()
+        for group in sorted(candidates, key=importance):
+            name = str(group["figure"].label or "").casefold()
+            conflicting = any(member.get("conflict_status") == "conflict" for member in group["members"])
+            if name and names[name] >= 2 and not conflicting:
+                continue
+            names[name] += 1
+            picked.append(group)
+            if len(picked) >= limit:
+                break
+        chosen = sorted(picked, key=lambda group: group["first"])
         approved = [introduction]
         claim_facts: list[dict[str, Any]] = []
         for group in chosen:
@@ -1629,10 +1896,25 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
         if recalled:
             segment.update(refresher_text=recalled["sentence"], refresher_fact_ids=[str(recalled["fact"]["id"])],
                            refresher_source_ids=added_sources)
+        entries.append((segment, unnamed_only))
+        if sum(not unnamed for _, unnamed in entries) >= duration:
+            break
+    # Stories whose figures can be named come first; one read as plain figures fills a place only when
+    # there are not enough of those. Ranking order is kept.
+    spare = max(0, duration - sum(not unnamed for _, unnamed in entries))
+    for segment, unnamed in entries:
+        if unnamed and spare <= 0:
+            continue
+        spare -= unnamed
         result.append(segment)
         if len(result) >= duration:
             break
     return result
+
+
+def reads_plain_figures(text: str) -> bool:
+    """True for narration that could not name what its figures measure ("The report gives 4 percent.")."""
+    return any(template.split("{}")[0] in text for template in _UNNAMED_FIGURE.values())
 
 
 _INTRODUCTIONS = sorted({text for frame in _NARRATION_FRAMES.values() for text in frame.values()}, key=len, reverse=True)
@@ -1643,6 +1925,18 @@ def _split_introduction(text: str) -> tuple[str, str]:
         if text.startswith(introduction):
             return introduction, text[len(introduction):].lstrip()
     return "", text
+
+
+_DISCLOSURE = {
+    "en": "This briefing is read by an AI voice. It reports figures from the cited sources and is not investment advice.",
+    "de": "Dieses Briefing wird von einer KI-Stimme gelesen. Es gibt Zahlen aus den genannten Quellen wieder und ist keine Anlageberatung.",
+    "nl": "Deze briefing wordt voorgelezen door een AI-stem. Ze geeft cijfers uit de genoemde bronnen weer en is geen beleggingsadvies.",
+}
+
+
+def spoken_opening(introduction: str, language: str) -> str:
+    """What the voice says first: that it is synthetic and gives no advice, then the briefing's introduction."""
+    return f"{_DISCLOSURE.get(str(language).lower(), _DISCLOSURE['en'])} {introduction}"
 
 
 def introduce_once(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1671,8 +1965,9 @@ def localized_headline(story: dict[str, Any], language: str) -> tuple[str, str |
     """The story's title for a listener's language, and that language when the title is known to be in it.
 
     English briefings keep the story title. For German and Dutch the title of a member article published in
-    that language is used (most stories have translated editions). Without one the story title stays, as the
-    transcript heading, and no language is claimed for it, so the voice never reads it in the wrong language.
+    that language is used, else the checked translation prepared with the corpus (``headlines``). Without
+    either the story title stays, as the transcript heading, and no language is claimed for it, so the voice
+    never reads it in the wrong language.
     """
     title = str(story.get("title", ""))
     language = str(language).lower()
@@ -1681,6 +1976,9 @@ def localized_headline(story: dict[str, Any], language: str) -> tuple[str, str |
             edition = " ".join(str(article.get("title") or "").split())
             if edition and str(article.get("language", "")).lower() == language:
                 return edition, language
+    translated = str((story.get("headlines") or {}).get(language) or "")
+    if translated:
+        return translated, language
     return title, None
 
 

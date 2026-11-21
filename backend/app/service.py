@@ -1,3 +1,4 @@
+import json
 import logging
 import inspect
 import os
@@ -15,9 +16,11 @@ from .pipeline import narrate, prepare, prepare_ranking
 from .providers import Providers
 from .storage import Store
 from .summaries import prepare_summaries, select_summaries
+from .translations import translate_corpus
 from .threads import assign_threads
 
-STAGES = ("ingestion", "story_extraction", "script_generation", "speech_generation")
+STAGES = ("ingestion", "story_extraction", "script_generation", "speech_generation", "label_translation")
+PREPARATION_STAGES = ("ingestion", "story_extraction", "label_translation")
 # Average pace of a narrated briefing. Narration is built only from verified figures and never padded,
 # so the briefing reports how long it will actually run next to the length the listener asked for.
 SPOKEN_WORDS_PER_MINUTE = 150
@@ -156,6 +159,12 @@ def prepare_corpus(store, articles, *, allow_fallback=True, report=None):
         logging.getLogger(__name__).warning("Live extraction failed; stored the offline heuristic clusters")
     if not stories:
         raise ValueError("Preparation produced no stories")
+    # Provider extraction is the paid, slow step. Keep its result beside the database until the corpus is
+    # stored, so a failure in a later step does not throw that work away.
+    checkpoint = store.path.with_name("extraction-checkpoint.json") if getattr(providers, "live", False) else None
+    if checkpoint:
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(json.dumps({"stories": stories, "usage": usage}), encoding="utf-8")
     by_id = {article["article_id"]: article for article in articles}
     for story in stories:
         for source in story.get("articles", []):
@@ -164,15 +173,57 @@ def prepare_corpus(store, articles, *, allow_fallback=True, report=None):
                 if article.get(key):
                     source[key] = article[key]
     assign_threads(stories)
+    # Headlines and measure names for listeners in the corpus's other languages (live only; checked labels).
+    translate_corpus(stories, providers)
     store.replace_corpus(articles, stories, prepare_summaries(stories), preparation_usage=usage)
+    if checkpoint:
+        checkpoint.unlink(missing_ok=True)
     if report is not None:
         count = getattr(providers, "heuristic_fallback_articles", 0)
         report["heuristic_fallback_articles"] = count if isinstance(count, int) else 0
     return stories
 
 
+MAX_LISTED_TOPICS = 36
+SUBJECT_AREA_MIN_STORIES = 5
+
+
 def list_topics(stories):
-    return sorted({topic for story in stories for topic in story.get("topics", [])})
+    """The topics a listener can choose from.
+
+    A small corpus offers every topic. A live import tags its stories with hundreds of one-off subjects, so
+    there the choice is the subject areas that several speakable stories report on, then the most common
+    tagged subjects, most frequent first. Stories withheld from briefings (advice, unverified) do not count.
+    """
+    every = sorted({topic for story in stories for topic in story.get("topics", [])})
+    if len(every) <= MAX_LISTED_TOPICS:
+        return every
+    speakable = [story for story in stories if pipeline._trust_eligible(story)[0]]
+    texts = [f"{story.get('title', '')} " + " ".join(str(fact.get("evidence", "")) for fact in story.get("facts", []))
+             for story in speakable]
+    areas = Counter({area: sum(bool(pattern.search(text)) for text in texts)
+                     for area, pattern in pipeline._TOPIC_PATTERNS.items()})
+    tagged = Counter(topic for story in speakable for topic in dict.fromkeys(story.get("topics", [])))
+    listed = [area for area, count in areas.most_common() if count >= SUBJECT_AREA_MIN_STORIES]
+    seen = {topic.casefold() for topic in pipeline._TOPIC_PATTERNS}
+    for topic, count in tagged.most_common():
+        if len(listed) >= MAX_LISTED_TOPICS or count < 3:
+            break
+        # One entry per subject: not a tag a subject area already covers ("revenue", "technologie"), nor the
+        # same word again in the singular or in another language of the corpus.
+        key = _SAME_TOPIC.get(topic.casefold(), topic.casefold())
+        if key in seen or key.rstrip("s") in seen or key + "s" in seen or topic == "news":
+            continue
+        if any(pattern.search(topic) for pattern in pipeline._TOPIC_PATTERNS.values()):
+            continue
+        seen.add(key)
+        listed.append(topic)
+    return listed
+
+
+_SAME_TOPIC = {"aandelen": "stocks", "aktien": "stocks", "aktie": "stocks", "aandeel": "stocks", "financiën": "finance",
+               "finanzen": "finance", "wirtschaft": "economy", "economie": "economy", "ki": "ai", "markt": "markets",
+               "märkte": "markets", "markten": "markets", "investitionen": "investing", "investeringen": "investing"}
 
 
 def wildcard_profile(wildcard):
@@ -206,6 +257,9 @@ def _briefing_story(story, language):
     entry = {"id": story["id"], "title": title, "reason": story["reason"]}
     if title_language:
         entry["title_language"] = title_language
+    if title != story.get("title") and title == (story.get("headlines") or {}).get(str(language).lower()):
+        # Shown beside the heading, so a listener can tell a translated headline from a publisher's own.
+        entry["source_title"] = story.get("title", "")
     return entry
 
 
@@ -220,10 +274,19 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
     limit = max(1, int(profile.get("duration", 5) or 5))
     # Narration stops at the requested story count. Stories with nothing that can be spoken faithfully
     # are passed over, so the next ranked story takes their place.
-    selected = pipeline.diversify(pipeline.rank(ranking, profile, feedback_events=feedback_events,
-                                                spoken_fact_ids=spoken_fact_ids, region=region))
+    ranked = pipeline.rank(ranking, profile, feedback_events=feedback_events, spoken_fact_ids=spoken_fact_ids, region=region)
+    if spoken_fact_ids:
+        # Stories this listener has not heard come first; one they have heard returns, with its remaining
+        # figures, only after those. Tomorrow's briefing is new stories, not leftovers of today's.
+        heard_facts = set(spoken_fact_ids)
+        heard_stories = {story["id"] for story in ranking if any(fact["id"] in heard_facts for fact in story.get("facts", []))}
+        ranked = sorted(ranked, key=lambda story: story["id"] in heard_stories)
+    # Far more candidates than a briefing plays, so stories with nothing speakable can be passed over.
+    selected = pipeline.diversify(ranked, limit=limit * 8 + 24)
     if not selected:
-        raise NoRelevantStories("No sourced stories match this profile")
+        raise NoRelevantStories(
+            "You are caught up: you have heard every matching story from the last seven days" if spoken_fact_ids
+            else "No sourced stories match this profile")
     if spoken_fact_ids:
         # Remembered facts change what can be said, so narrate this listener's own script. A remembered figure is
         # never replayed as news; where it gives context to an update of the same measure it is recalled briefly.
@@ -318,7 +381,7 @@ RATE_PREFIX = {"ingestion": "OPENAI_EMBEDDING", "story_extraction": "OPENAI", "s
 
 
 def usage_report(store, mode=None):
-    """Preparation (ingestion + extraction) is reported apart from the average cost of one briefing.
+    """Preparation (ingestion + extraction + label translation) is reported apart from the average cost of one briefing.
 
     Preparation covers the corpus currently loaded. Per briefing = script spend averaged over saved
     briefings + speech spend averaged over briefings with successful audio, including cache hits.
@@ -354,7 +417,7 @@ def usage_report(store, mode=None):
         value = by_stage[name]["estimated_usd"]
         return None if value is None else (value / count if count else 0.0)
 
-    prep_cost = total(("ingestion", "story_extraction"))
+    prep_cost = total(PREPARATION_STAGES)
     per_briefing = None
     if briefing_count:
         script = average("script_generation", briefing_count)

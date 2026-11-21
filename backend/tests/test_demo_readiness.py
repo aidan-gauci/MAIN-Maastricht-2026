@@ -108,7 +108,8 @@ class AudioRecoveryTest(StoreTestCase):
             second = main.retry_audio(briefing["id"])
         self.assertEqual("ready", first["audio_status"])
         self.assertEqual(first, second)
-        self.assertEqual(len(first["segments"]), voice.call_count)
+        # One clip per story, plus the briefing's opening line as its own shared clip.
+        self.assertEqual(len(first["segments"]) + 1, voice.call_count)
         self.assertEqual(first["segments"], briefing["segments"])
         self.assertTrue(main.audio(first["audio_url"].rsplit("/", 1)[-1]))
 
@@ -123,7 +124,7 @@ class AudioRecoveryTest(StoreTestCase):
             self.assertEqual(404, caught.exception.status_code)
             retried = main.retry_audio(briefing["id"])
         self.assertGreater(len(briefing["segments"]), 1)
-        self.assertEqual(len(briefing["segments"]), voice.call_count)
+        self.assertEqual(len(briefing["segments"]) + 1, voice.call_count)
         self.assertEqual(briefing, retried)
         self.assertTrue((self.store.audio_dir / filename).is_file())
 
@@ -237,10 +238,13 @@ class CostSeparationTest(StoreTestCase):
             return Providers("live", recorder)
 
         with (
-            patch.dict(os.environ, self.RATES),
+            # One request per import here: this test is about cost records, not request sizes.
+            patch.dict(os.environ, {**self.RATES, "BRIEFING_LIVE_BATCH_ARTICLES": "24"}),
             patch.object(service, "MODE", "live"),
             patch.object(service, "get_providers", side_effect=instrument_providers),
             patch.object(Providers, "_client", return_value=client),
+            # Label translation has requests of its own; the scripted replies here are extraction's.
+            patch.object(service, "translate_corpus", return_value={}),
         ):
             original_stories = prepare_corpus(self.store, self.articles, allow_fallback=False)
             original_report = usage_report(self.store)
@@ -341,7 +345,7 @@ class CostSeparationTest(StoreTestCase):
             set(report),
         )
         self.assertEqual(
-            ["ingestion", "story_extraction", "script_generation", "speech_generation"],
+            ["ingestion", "story_extraction", "script_generation", "speech_generation", "label_translation"],
             [row["stage"] for row in report["stages"]],
         )
 

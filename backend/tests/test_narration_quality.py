@@ -310,7 +310,6 @@ class UnderstoodFiguresOnlyTest(unittest.TestCase):
             "Job growth reached 165k jobs.",
             "Revenue was $1.5 trillion last year.",
             "Revenue is valued at 18.5x earnings.",
-            "Profit rose by 25 bps.",
             "Profit rose by 5 percentage points.",
             "Profit was 3 times higher.",
             "Gewinn 3,5 Mio. Euro.",
@@ -319,6 +318,10 @@ class UnderstoodFiguresOnlyTest(unittest.TestCase):
                 story, segments = self.narrate(body)
                 self.assertTrue(story["facts"])
                 self.assertEqual(segments, [])
+
+    def test_bps_is_spoken_as_basis_points_never_as_a_bare_number(self):
+        _, (segment,) = self.narrate("The central bank raised its policy rate by 25bps on Tuesday.")
+        self.assertEqual(claims(segment), ["Rate change, 25 basis points."])
 
     def test_an_understood_figure_is_still_spoken_beside_one_that_is_not(self):
         story, (segment,) = self.narrate("Job growth reached 165k jobs. Profit reached 12 million euros.")

@@ -157,9 +157,15 @@ def _voice_of(providers):
     return voice if isinstance(voice, str) else os.getenv("ELEVENLABS_VOICE_ID", "")
 
 
-def create_audio(briefing, store, providers, mode):
-    """Reuse synthesized segments and assemble a single file for the existing player."""
-    extension = "mp3" if mode == "live" else "wav"
+def clip_plan(briefing, providers, mode):
+    """The clips a briefing plays, in order, as (kind, spoken text, cache key).
+
+    Every clip is keyed on what it says and how it sounds (voice, speech model, language), never on the
+    listener, so a clip is rendered once and reused by every briefing that plays it:
+    - "intro": the briefing's opening line, the same for everyone at that expertise level;
+    - "story": one story as it reads for everyone, headline first, wherever it sits in a briefing;
+    - "refresher": a listener's short recall line, spoken just before its story.
+    """
     language = briefing["language"]
     voice = (
         # The briefing's own voice, so briefings in different voices never share cached clips.
@@ -167,24 +173,36 @@ def create_audio(briefing, store, providers, mode):
         os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
         sorted(voice_settings().items()),
     ) if mode == "live" else ("offline",)
-    if not briefing["segments"]:
-        raise ValueError("A briefing needs at least one audio segment")
     # The voice announces each story by its headline; the transcript already shows it as a heading.
     # A German or Dutch briefing announces only a title that is in its own language.
-    from .pipeline import spoken_text, story_segment
+    from .pipeline import _split_introduction, spoken_opening, spoken_text, story_segment
     stories = {"segment-" + str(story.get("id")): story for story in briefing.get("stories", [])}
-    # The clips in playing order, each with the text it speaks. A story's clip is keyed on the story as it reads
-    # without any refresher, so it is shared by every listener whose story reads the same. A refresher is its own
-    # small clip, spoken ahead of its story's clip in the same voice, style and language, and shared by text.
     parts = []
     for segment in briefing["segments"]:
         story = stories.get(segment.get("id"), {})
+        introduction, body = _split_introduction(str(segment.get("text", "")))
+        if introduction and body:
+            # Spoken as its own clip, so the story's clip is the same whether it opens the briefing or not.
+            # It starts by saying the voice is synthetic and that the briefing is not investment advice.
+            opening = spoken_opening(introduction, language)
+            parts.append(("intro", opening, _audio_key(("intro-v2", mode, voice, language, opening))))
+        else:
+            body = str(segment.get("text", ""))
         if refresher := str(segment.get("refresher_text") or "").strip():
-            parts.append((refresher, _audio_key(("refresher-v1", mode, voice, language, refresher))))
-        shared = dict(story_segment(segment), text=spoken_text(
-            segment, story.get("title", ""), language, story.get("title_language"),
-        ))
-        parts.append((shared["text"], _audio_key(("segment-v1", mode, voice, language, shared))))
+            parts.append(("refresher", refresher, _audio_key(("refresher-v1", mode, voice, language, refresher))))
+        shared = dict(story_segment(segment), text=body)
+        shared["text"] = spoken_text(shared, story.get("title", ""), language, story.get("title_language"))
+        parts.append(("story", shared["text"], _audio_key(("segment-v1", mode, voice, language, shared))))
+    return parts
+
+
+def create_audio(briefing, store, providers, mode):
+    """Reuse synthesized segments and assemble a single file for the existing player."""
+    extension = "mp3" if mode == "live" else "wav"
+    language = briefing["language"]
+    if not briefing["segments"]:
+        raise ValueError("A briefing needs at least one audio segment")
+    parts = [(text, key) for _, text, key in clip_plan(briefing, providers, mode)]
     clips = [store.audio_dir / f"{key}.{extension}" for _, key in parts]
     if len(clips) == 1:
         target = clips[0]

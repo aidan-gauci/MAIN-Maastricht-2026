@@ -74,7 +74,18 @@ $env:BRIEFING_CORPUS = "event"
 
 Use `--limit 20` for a sample and `--official PATH` to append public releases in the normalized JSONL format. See `backend/demo/articles.jsonl` for that format. Event preparation without providers is a heuristic baseline. Review its clusters and evidence before using it in a live demo. No organizer answer key was provided, so grouping quality is judged by reading the clusters and spot-checking facts against their source articles.
 
-Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load your own profile cards in place of the two fictional ones. The wildcard uses prepared topic chips, three expertise levels, durations of 3, 5, or 8 minutes, and a list of supported output languages. Duration is a target and depends on how much verified material is available.
+Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load your own profile cards in place of the four built-in ones (everyday economics, markets professional, policy watcher, and a German everyday listener). Choosing a profile sets the output language to the profile's own. The wildcard uses topic chips, three expertise levels, a length of 3, 5, or 8 stories (about 1, 2, or 3 minutes of audio), and the supported output languages. On a large corpus the chips are the subject areas that several speakable stories report on, then the most common tagged subjects, 36 at most.
+
+### Labels in the listeners' other languages
+
+A figure is named in the words of the article that reports it, and a story is announced by its lead article's headline. For listeners in another language, a live import translates those short labels with the small model, one request per story (`label_translation` in the cost report): the headline, and each measure name. Figures never pass through it. Every translation is checked before it is kept: it must repeat the numbers of the original and add none, a measure name must hold no number and no advice word, and its length must be in proportion. A label that fails is dropped and the story is narrated in that language as it would be without it. A translated headline is marked as such in the transcript, with the original beside it.
+
+For a corpus imported before this step existed, run it on its own. It asks only for labels that are missing, so it can be repeated:
+
+```powershell
+$env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"; $env:ALLOW_EXTERNAL_PROVIDER_DATA = "1"
+./.venv/Scripts/python.exe -m backend.app translate-labels
+```
 
 ### Regrouping an imported corpus, and event threads
 
@@ -91,9 +102,25 @@ It prints the stories before and after, how many were merged or split, the cross
 
 `evaluate-grouping PATH [--embeddings vectors.json] [--probe WORD]` is an offline check that reads the feeds only. It scores translation matching against the organizers' pairs (the same author and outlet family within 15 minutes, taking the nearest English piece; a team byline counts when the figures match), and reports group sizes, multi-day groups, one outlet's repeated stories, cross-outlet merges (when given a JSON mapping of article ID to story vector) and event threads. `--probe Huang` shows how many stories with that word in an English headline sit in a thread. It lists headlines only.
 
+## Trust checks
+
+Nothing is spoken that cannot be traced, and nothing is spoken that recommends a trade.
+
+- **Extraction.** Live import sends one article per request to the small model and asks for figures with the verbatim sentence they come from and a short name for what each measures. A figure is kept only if its evidence is found in the article, the value and unit are printed in that evidence, and the name is built from the article's own words.
+- **Narration.** A briefing is assembled from those facts as "Name, amount." sentences. No model writes or rearranges a listener's briefing, so a figure cannot be attached to a different claim. Sources that give different values for one measure are both read and labelled as conflicting.
+- **No investment advice.** Stock picks, fund and ETF recommendations, an investment publisher's round-ups of its own picks, "should you buy" pieces, upgrades and downgrades, trading signals and price predictions are recognised by their headline and never selected. Inside a news report, a rating, a rank, a price target or a chart level (support, resistance) is never read out. The gate is deliberately wide: withholding a news story costs one story, reading out a recommendation costs trust. Every briefing opens by saying that the voice is synthetic and that it is not investment advice.
+- **`audit-claims PATH`** re-reads the original feeds and checks every stored fact (evidence verbatim in its article, figure printed in the evidence, name in the article's words, source linked), every translated label, and every prepared narration (each spoken number is the value of a cited fact). It makes no provider call.
+
+```powershell
+$env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"
+./.venv/Scripts/python.exe -m backend.app audit-claims "C:/path/event-data.zip"
+```
+
+On the full event corpus (1,740 articles, 1,361 stories): 10,163 of 10,163 figures are verbatim in their article with the figure printed in the evidence; 6,382 of 6,382 measure names use the article's words; 1,261 translated headlines and 7,730 translated measure names pass their checks; 17,802 of 17,802 prepared narrations speak only cited figures; 635 stories are withheld as investment advice (the corpus is heavy with one investment publisher's stock-pick content).
+
 ## Shared recommendations and summaries
 
-The listener's topic weights form an interest vector. The app ranks eligible stories against that vector, applies topic exclusions, and uses the same weights to choose a prepared angle for each selected story. Language and expertise select a version of that angle.
+The listener's topic weights form an interest vector. The app ranks eligible stories against that vector, applies topic exclusions, and uses the same weights to choose a prepared angle for each selected story. Language and expertise select a version of that angle. A story about any one of a listener's interests ranks ahead of unrelated headline news, however many interests they named; recency, coverage by several outlets and belonging to a developing event order the rest. A listener's next briefing starts with stories they have not heard.
 
 Each import prepares a neutral summary and up to three evidence-backed angles per eligible story. Summary text is prepared locally, with the same fact IDs, sources, and conflict labels across angles. Briefing requests select and assemble the prepared segments. Older databases can still serve briefings. Reimport the corpus to store the shared summaries so workers can load them directly after a restart.
 
@@ -104,9 +131,10 @@ Audio clips are synthesized on first use and reused across listeners. The app as
 Briefings can be listened to in English, German (Deutsch) and Dutch (Nederlands) in demo and live mode. The "Output language" menu lists them by their own names; the page itself stays in English. The choice applies to saved profiles, custom briefings and schedules alike. Set `BRIEFING_MULTILINGUAL=0` to offer English only; the setting is read on every request.
 
 - **Narration.** Labels, units, currency words and the introduction are written in the listener's language, with decimal commas ("3,25 Prozent"). Figures come from the verified facts of whichever edition states them, so every sentence still cites its sources. A figure whose scale or unit cannot be read faithfully is left out instead of guessed. Examples are German "Billionen" (a trillion), "Tausend", "Prozentpunkte" and Dutch "biljoen", "duizend", "keer".
-- **Headlines.** A German or Dutch briefing shows each story under the title of its edition in that language and the voice reads it before the figures. Where a story has no edition in that language, the original title stays as the heading and the voice reads no headline. English briefings are unchanged.
+- **Headlines.** A German or Dutch briefing shows each story under the title of its edition in that language and the voice reads it before the figures. Where a story has no edition in that language, a live corpus uses the checked translation of the headline (see *Labels in the listeners' other languages*) and marks it as translated. Without either, the original title stays as the heading and the voice reads no headline.
+- **Measure names.** A name the extraction model gave a figure is spoken in its article's language, and in another language through its checked translation. On the event corpus this took German and Dutch from 620 of 1,049 stories read as unnamed figures to 42 of 657.
 - **Voices.** Live speech uses `eleven_multilingual_v2`, which speaks all three languages. Demo mode uses eSpeak NG's `de` and `nl` voices, or on Windows an installed System.Speech voice for that language. Without one it falls back to the English voice, so audio is always produced.
-- **Limits.** Only stories with a German or Dutch edition get a localized headline. The listening quality of the offline voices is basic. Judge the final sound with ElevenLabs.
+- **Limits.** Translated labels are machine translations of short phrases; they are checked for numbers, not for style. The fixture (demo mode) has no translations, so there only stories with a German or Dutch edition get a localized headline. The listening quality of the offline voices is basic. Judge the final sound with ElevenLabs.
 
 ## Live providers and costs
 
@@ -124,7 +152,7 @@ The application records token usage for OpenAI and submitted text characters for
 | `ELEVENLABS_USD_PER_1000_CHARS` | USD per 1,000 submitted characters |
 
 Costs are split into two figures:
-- `preparation_usd` covers ingestion and story extraction for the corpus currently loaded. A successful reimport replaces the preparation totals. If a reimport fails, the report continues to describe the previously loaded corpus.
+- `preparation_usd` covers ingestion, story extraction and label translation for the corpus currently loaded. A successful reimport replaces the preparation totals. If a reimport fails, the report continues to describe the previously loaded corpus.
 - `per_briefing_usd` is script spend averaged over saved briefings, plus speech spend averaged over briefings that received audio, including cache hits and successful retries. Speech-stage calls count clips synthesized by the provider. If audio has yet to succeed for any briefing, incurred speech spend is spread over saved briefings.
 
 USD figures are calculated from the recorded tokens and characters with the rates set when the report is built, so you can set or correct rates after a run. If a rate is missing for a stage that was used, the matching figure is unavailable. The 10x preparation projection assumes the same article mix, model routing, and unit rates. It does not multiply the cost of one listener's briefing.
@@ -144,11 +172,36 @@ Use a fresh event data directory for a clean measurement because the cost view a
 
 Prices are the vendors' official list prices: gpt-4o-mini $0.15/$0.60, text-embedding-3-small $0.02 per million tokens; ElevenLabs Multilingual v2 $0.08 per 1,000 characters on every plan.
 
-**News preparation is shared by all listeners.** Measured live import of the full dataset: 1,740 articles, 211 extraction calls, 2,071,042 input and 566,543 output tokens, **$0.651**; **$6.51 at ten times the volume** (about $0.00037 per article). A weekday of 172 to 190 articles costs about $0.07–0.09 to prepare, whatever the number of listeners; OpenAI's Batch API halves that for scheduled runs.
+**News preparation is shared by all listeners.** Measured live import of the full dataset (1,740 articles), from `costs`:
+
+| Step | Calls | Tokens (in / out) | Cost |
+|---|---|---|---|
+| Embeddings, to merge reports across outlets | 6 | 395,696 | $0.008 |
+| Extraction, one article per request (gpt-4o-mini) | 1,740 | 2,590,920 / 810,107 | $0.875 |
+| Headlines and measure names for German and Dutch listeners (gpt-4o-mini) | 961 | 230,572 / 91,800 | $0.090 |
+| **Full dataset** | | | **$0.97** |
+| **Ten times the volume** | | | **$9.72** |
+
+That is about $0.00056 per article. A weekday of 172 to 190 articles costs about $0.10 to prepare, whatever the number of listeners. Grouping, validation, naming, ranking and narration are code and cost nothing; no large model is used, and no model is called when a listener asks for a briefing. OpenAI's Batch API would halve preparation (about $0.05 a day at this volume) at up to 24 hours' delay. It is not implemented: it suits a nightly production run, and the saving is too small to trade for that delay here.
 
 **Audio is paid once per story version, then shared.** A story clip is rendered the first time a listener needs it in a given language, expertise level and voice, then every later listener with the same version reuses it, at any hour. Only the short refresher line is personal. Speed is changed by the player on the existing file, so it is free.
 
-**Decision: no expressiveness setting.** Listeners choose among six voices, which is the customisation they notice. A voice-style option (steady, default, expressive) was built and removed: every level renders every story again in every voice and language, multiplying the versions to render threefold for a difference most listeners do not hear. Worst-case audio cost per listener per month, with choices spread evenly across the options (in practice most keep the defaults, which is cheaper), 4 stories per daily briefing, about 200 characters per story clip and one refresher line in three briefings:
+`backtest-audio` simulates an audience on the imported corpus without calling a provider: each listener gets a profile or a wildcard, a language and a voice, and asks for a briefing on consecutive days with their memory of heard facts. It counts the clips requested and the clips that would be rendered, and checks every briefing. On the event corpus (3 days, 6 voices, 3 languages), audio cost per listener per month of daily briefings:
+
+| Daily listeners | Typical choices | Choices spread evenly (worst case) | Clips reused | If nothing were shared |
+|---|---|---|---|---|
+| 100 | $1.93 | $2.52 | 55% | $4.09 |
+| 1,000 | $0.59 | $0.76 | 86% | $3.97 |
+| 10,000 | $0.11 | $0.12 | 97.5% | $3.92 |
+
+"Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 688,044 spoken facts were replayed to a listener who had already heard them, and 0 were spoken without their source. The month is extrapolated from the 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives $0.14 at 10,000 listeners.
+
+```powershell
+$env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"
+./.venv/Scripts/python.exe -m backend.app backtest-audio --listeners 100,1000,10000 --days 3 --both
+```
+
+**Decision: no expressiveness setting.** Listeners choose among six voices, which is the customisation they notice. A voice-style option (steady, default, expressive) was built and removed: every level renders every story again in every voice and language, multiplying the versions to render threefold for a difference most listeners do not hear. The table below is the model that decision was made on, before the backtest existed (it is a calculation, not a measurement): worst-case audio cost per listener per month, with choices spread evenly across the options, 4 stories per daily briefing, about 200 characters per story clip and one refresher line in three briefings:
 
 | Daily listeners | Voices only (shipped) | Voices and three styles (removed) |
 |---|---|---|
@@ -171,7 +224,9 @@ The prototype ranker supports scheduled relevance, explicit regions, and seven-d
 
 ## Demo and cleanup
 
-Generate two distinct profiles, audit three spoken claims against their source articles, generate a wildcard live, and open the evidence and cost views. For the presentation, show the full corpus measurement and 10x estimate. Pitch a newsroom publisher as the buyer and show how editorial review fits between batch preparation and audio delivery.
+Generate two distinct profiles, audit three spoken claims against their source articles in the Traces view, generate a wildcard live, and open the evidence and cost views. For the presentation, show the full corpus measurement and 10x estimate. Pitch a newsroom publisher as the buyer and show how editorial review fits between batch preparation and audio delivery. [docs/judging-evidence.md](docs/judging-evidence.md) lists the measured numbers against each judging criterion.
+
+Play each profile's briefing once before presenting: its clips are then cached, so it opens at once and costs nothing more. A wildcard in a new language or voice takes about fifteen seconds the first time, while its clips are rendered.
 
 Run the fixture checks with `./.venv/Scripts/python.exe -m unittest discover -s backend/tests`. The fictional fixture's expected clusters and values live in `backend/demo/answer-key.json` and are checked by the test suite.
 

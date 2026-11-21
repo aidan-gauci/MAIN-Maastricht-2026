@@ -212,7 +212,7 @@ class Store:
                 for story_id, summary in (summaries or {}).items()
             ])
             if preparation_usage is not None:
-                db.execute("DELETE FROM usage WHERE stage IN ('ingestion','story_extraction')")
+                db.execute("DELETE FROM usage WHERE stage IN ('ingestion','story_extraction','label_translation')")
                 for row in preparation_usage:
                     self._insert_usage(db, **row)
 

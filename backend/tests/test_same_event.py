@@ -39,6 +39,8 @@ class DiversityTest(unittest.TestCase):
         stories = [{"id": "a", "embedding": [1.0, 0.0]}, {"id": "b", "embedding": [0.97, 0.1]},
                    {"id": "c", "embedding": [0.0, 1.0]}, {"id": "d"}]
         self.assertEqual([s["id"] for s in pipeline.diversify(stories)], ["a", "c", "d"])
+        # A briefing needs only a handful: stop comparing once enough are kept.
+        self.assertEqual([s["id"] for s in pipeline.diversify(stories, limit=2)], ["a", "c"])
 
 
 if __name__ == "__main__":

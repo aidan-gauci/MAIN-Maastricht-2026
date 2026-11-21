@@ -309,7 +309,15 @@ class BriefingLanguageTest(unittest.TestCase):
                           or audio_stub(path)):
             briefing = service.generate_briefing(self.store, self.profile("de"), persist=False)
         by_segment = {"segment-" + s["id"]: s for s in briefing["stories"]}
-        texts = {segment["id"]: text for segment, (text, _) in zip(briefing["segments"], spoken)}
+        # The opening line is its own clip; every other clip is one story.
+        # It says first that the voice is synthetic and that this is not investment advice.
+        introductions = tuple(_NARRATION_FRAMES["de"].values())
+        opening, = [text for text, _ in spoken if text.endswith(introductions)]
+        self.assertTrue(opening.endswith("Das berichten die Quellen."))
+        self.assertIn("KI-Stimme", opening)
+        self.assertIn("keine Anlageberatung", opening)
+        clips = [text for text, _ in spoken if not text.endswith(introductions)]
+        texts = {segment["id"]: text for segment, text in zip(briefing["segments"], clips)}
         self.assertEqual({language for _, language in spoken}, {"de"})
         self.assertEqual(briefing["audio_status"], "ready")
         rate = texts["segment-" + self.rate_story]
@@ -317,7 +325,8 @@ class BriefingLanguageTest(unittest.TestCase):
         for segment in briefing["segments"]:
             story = by_segment[segment["id"]]
             if "title_language" not in story:
-                self.assertEqual(texts[segment["id"]], segment["text"])  # no English headline in a German briefing
+                # No English headline in a German briefing: the clip is the story text alone.
+                self.assertEqual(texts[segment["id"]], segment["text"].removeprefix("Das berichten die Quellen.").strip())
             else:
                 self.assertIn(story["title"], texts[segment["id"]])
                 self.assertNotIn(story["title"], segment["text"])  # the transcript shows it as a heading instead
