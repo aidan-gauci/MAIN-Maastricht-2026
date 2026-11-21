@@ -24,16 +24,12 @@ VOICE_SETTING_ENV = {
 }
 
 
-# Three listener-facing levels. "balanced" keeps the voice's own defaults.
-EXPRESSIVENESS = {
-    "calm": {"stability": 0.75, "style": 0.0},
-    "balanced": {},
-    "expressive": {"stability": 0.3, "style": 0.35},
-}
-
-
-def voice_settings(expressiveness: str = "balanced") -> dict[str, float]:
-    """ElevenLabs voice settings: environment overrides first, then the listener's expressiveness level."""
+# There is no per-listener expressiveness setting. Each style level would render every story a second or
+# third time in every voice and language, multiplying audio cost for little audible difference; listeners
+# choose a voice instead, and change speed for free in the player. Server operators may still tune the
+# voices through these environment variables, which apply to everyone and keep audio shared.
+def voice_settings() -> dict[str, float]:
+    """ElevenLabs voice settings from the server environment; unset ones keep each voice's defaults."""
     settings = {}
     for field, name in VOICE_SETTING_ENV.items():
         try:
@@ -43,7 +39,6 @@ def voice_settings(expressiveness: str = "balanced") -> dict[str, float]:
             continue
     if "speed" in settings:
         settings["speed"] = min(1.2, max(0.7, settings["speed"]))
-    settings.update(EXPRESSIVENESS.get(expressiveness, {}))
     return settings
 
 
@@ -73,8 +68,7 @@ RECOVERABLE_EXTRACTION_ERRORS = (ExtractionOutputError, json.JSONDecodeError)
 
 
 class Providers:
-    def __init__(self, mode: str = "offline", record_usage: Callable[..., None] | None = None, voice_preset: str = "default",
-                 expressiveness: str = "balanced"):
+    def __init__(self, mode: str = "offline", record_usage: Callable[..., None] | None = None, voice_preset: str = "default"):
         self.mode = mode.lower()
         self.record_usage = record_usage or (lambda *args, **kwargs: None)
         # Set when live extraction raised a provider failure (auth, network, quota, bad configuration);
@@ -83,7 +77,6 @@ class Providers:
         # Articles whose provider reply stayed unusable and were extracted with the local heuristic.
         self.heuristic_fallback_articles = 0
         self.voice_preset = voice_preset
-        self.expressiveness = expressiveness if expressiveness in EXPRESSIVENESS else "balanced"
 
     @staticmethod
     def _usd(input_tokens: int = 0, output_tokens: int = 0, characters: int = 0, prefix: str = "OPENAI") -> float | None:
@@ -243,7 +236,7 @@ class Providers:
         client = ElevenLabs(api_key=api_key, timeout=speech_timeout())
         text = with_pauses(text)
         options = {}
-        if settings := voice_settings(self.expressiveness):
+        if settings := voice_settings():
             from elevenlabs import VoiceSettings
             options["voice_settings"] = VoiceSettings(**settings)
         audio = client.text_to_speech.convert(text=text, voice_id=voice_id, model_id=os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), output_format="mp3_44100_128", **options)

@@ -441,7 +441,7 @@ class RefresherAudioTest(unittest.TestCase):
 
         counts = {}
         for voice in ("voice-a", "voice-b"):
-            provider = SimpleNamespace(synthesize=synthesize, voice_id=lambda voice=voice: voice, expressiveness="balanced")
+            provider = SimpleNamespace(synthesize=synthesize, voice_id=lambda voice=voice: voice)
             with patch("backend.app.audio.shutil.which", return_value="ffmpeg"), patch(
                 "backend.app.audio._assemble_audio",
                 side_effect=lambda clips, output, ffmpeg: Path(output).write_bytes(b"ID3" + b"\0" * 4000),

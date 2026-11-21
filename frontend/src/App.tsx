@@ -77,11 +77,6 @@ const applySpeed = (element: HTMLAudioElement | null, speed: number) => {
   element.defaultPlaybackRate = speed;
   element.playbackRate = speed;
 };
-// Expressiveness is sent with a new briefing and used only when that briefing's audio is generated.
-type Expressiveness = 'calm' | 'balanced' | 'expressive';
-const EXPRESSIVENESS: { id: Expressiveness; label: string }[] = [{ id: 'calm', label: 'Steady' }, { id: 'balanced', label: 'Default' }, { id: 'expressive', label: 'Expressive' }];
-const EXPRESSIVENESS_KEY = 'briefing-expressiveness';
-const storedExpressiveness = (): Expressiveness => { const value = readSetting(EXPRESSIVENESS_KEY); return EXPRESSIVENESS.some(level => level.id === value) ? value as Expressiveness : 'balanced'; };
 // Scheduled delivery needs the n8n workflows, a public HTTPS backend and durable storage; hide it unless explicitly enabled.
 const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE === '1';
 const defaultTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -110,7 +105,6 @@ export default function App() {
   const [expertise, setExpertise] = useState('intermediate');
   const [duration, setDuration] = useState(5);
   const [language, setLanguage] = useState('en');
-  const [expressiveness, setExpressiveness] = useState<Expressiveness>(storedExpressiveness);
   const [action, setAction] = useState<'briefing' | 'audio' | null>(null);
   const [briefingError, setBriefingError] = useState('');
   const [audioError, setAudioError] = useState('');
@@ -287,7 +281,7 @@ export default function App() {
   const allFacts = useMemo(() => evidence.flatMap(item => item.facts), [evidence]);
   const canGenerate = mode === 'profile' ? Boolean(activeProfile) : selectedTopics.length > 0;
   const wildcard = { topics: selectedTopics, expertise, duration, language };
-  const delivery = { listener_id: listenerId, language, region: scheduleDraft.region, voice_preset: scheduleDraft.voice_preset, expressiveness };
+  const delivery = { listener_id: listenerId, language, region: scheduleDraft.region, voice_preset: scheduleDraft.voice_preset };
   const request = mode === 'profile' ? { ...delivery, profile_id: profileId } : { ...delivery, wildcard };
   const settingsKey = mode === 'profile'
     ? JSON.stringify(request)
@@ -468,7 +462,7 @@ export default function App() {
             <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageLabel(value)}</option>)}</select></label>
             {regions.length > 1 && <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>}
             {voicePresets.length > 1 && <div className="voice-field">
-              <label>Voice<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} aria-describedby="voice-style-note" onChange={e => { stopVoiceSample(); updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value })); }}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{voiceOptionLabel(preset, language)}</option>)}</select></label>
+              <label>Voice<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} aria-describedby="voice-note" onChange={e => { stopVoiceSample(); updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value })); }}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{voiceOptionLabel(preset, language)}</option>)}</select></label>
               {(() => {
                 const chosen = voicePresets.find(preset => preset.id === scheduleDraft.voice_preset);
                 if (!chosen || voiceVerifiedFor(chosen, language)) return null;
@@ -480,8 +474,7 @@ export default function App() {
               </button>}
               {sampleError && <p className="action-error" role="alert">{sampleError}</p>}
             </div>}
-            <label>Voice style<select value={expressiveness} aria-describedby="voice-style-note" onChange={e => { const value = e.target.value as Expressiveness; setExpressiveness(value); writeSetting(EXPRESSIVENESS_KEY, value); }}>{EXPRESSIVENESS.map(level => <option key={level.id} value={level.id}>{level.label}</option>)}</select></label>
-            <p className="microcopy" id="voice-style-note">Voice and voice style apply to the next briefing you create. Change playback speed in the player at any time.</p>
+            <p className="microcopy" id="voice-note">{voicePresets.length > 1 ? 'The voice applies to the next briefing you create. ' : ''}Change playback speed in the player at any time.</p>
           </div>
           {SHOW_SCHEDULE && <details className="schedule-settings">
             <summary><span><Clock3 size={15}/>Schedule delivery</span><ChevronDown size={15}/></summary>

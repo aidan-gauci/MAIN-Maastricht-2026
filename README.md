@@ -140,6 +140,25 @@ Set the actual voice IDs in the named server environment variables. An unavailab
 
 Use a fresh event data directory for a clean measurement because the cost view accumulates calls, including retries. The 10x preparation projection assumes the same article mix, model routing, and unit rates. It does not multiply the cost of one listener's briefing. Missing rates leave the USD estimate unavailable.
 
+### Scalability and cost
+
+Prices are the vendors' official list prices: gpt-4o-mini $0.15/$0.60, text-embedding-3-small $0.02 per million tokens; ElevenLabs Multilingual v2 $0.08 per 1,000 characters on every plan.
+
+**News preparation is shared by all listeners.** Measured live import of the full dataset: 1,740 articles, 211 extraction calls, 2,071,042 input and 566,543 output tokens, **$0.651**; **$6.51 at ten times the volume** (about $0.00037 per article). A weekday of 172 to 190 articles costs about $0.07–0.09 to prepare, whatever the number of listeners; OpenAI's Batch API halves that for scheduled runs.
+
+**Audio is paid once per story version, then shared.** A story clip is rendered the first time a listener needs it in a given language, expertise level and voice, then every later listener with the same version reuses it, at any hour. Only the short refresher line is personal. Speed is changed by the player on the existing file, so it is free.
+
+**Decision: no expressiveness setting.** Listeners choose among six voices, which is the customisation they notice. A voice-style option (steady, default, expressive) was built and removed: every level renders every story again in every voice and language, multiplying the versions to render threefold for a difference most listeners do not hear. Worst-case audio cost per listener per month, with choices spread evenly across the options (in practice most keep the defaults, which is cheaper), 4 stories per daily briefing, about 200 characters per story clip and one refresher line in three briefings:
+
+| Daily listeners | Voices only (shipped) | Voices and three styles (removed) |
+|---|---|---|
+| 100 | $1.80 ($180 a month) | $1.87 |
+| 1,000 | $1.15 ($1,149 a month) | $1.62 |
+| 10,000 | $0.30 ($3,025 a month) | $0.76 |
+| 100,000 | $0.07 ($6,915 a month) | $0.12 |
+
+The cost per listener falls as the audience grows, because each story version is rendered once for everyone who needs it.
+
 ## Scheduled delivery
 
 The schedule form is hidden by default because the n8n workflows are inactive and no production service is configured. To show it for development, build the frontend with `VITE_SHOW_SCHEDULE=1` (for example `$env:VITE_SHOW_SCHEDULE = "1"; npm run build`). The API and the local demo timer are unaffected.

@@ -165,7 +165,7 @@ def create_audio(briefing, store, providers, mode):
         # The briefing's own voice, so briefings in different voices never share cached clips.
         _voice_of(providers),
         os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
-        sorted(voice_settings(getattr(providers, "expressiveness", "balanced")).items()),
+        sorted(voice_settings().items()),
     ) if mode == "live" else ("offline",)
     if not briefing["segments"]:
         raise ValueError("A briefing needs at least one audio segment")

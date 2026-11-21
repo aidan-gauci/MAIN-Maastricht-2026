@@ -211,7 +211,7 @@ def _briefing_story(story, language):
 
 def generate_briefing(store, profile, *, listener_id=None, region="all", voice_preset="default",
                       spoken_fact_ids=None, feedback_events=None, briefing_id=None,
-                      available_at=None, persist=True, scheduled=False, expressiveness="balanced"):
+                      available_at=None, persist=True, scheduled=False):
     profile = deepcopy(profile)
     profile["region"] = region
     ranking, summaries, _, has_stories = store.recommendation_snapshot(_build_recommendations)
@@ -249,7 +249,6 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
         language=profile["language"],
         region=region,
         voice_preset=voice_preset,
-        expressiveness=expressiveness,
         stories=[
             _briefing_story(story, profile["language"])
             for story in selected if any(fact["id"] in used for fact in story["facts"])
@@ -289,8 +288,7 @@ def render_audio(store, briefing, providers=None, *, save=True):
         # A missing file (for example after cleanup) is re-rendered instead of returning a dead URL.
         briefing["audio_url"] = None
         try:
-            configured = providers or Providers(MODE, store.record_usage, briefing.get("voice_preset", "default"),
-                                                expressiveness=briefing.get("expressiveness", "balanced"))
+            configured = providers or Providers(MODE, store.record_usage, briefing.get("voice_preset", "default"))
             briefing["audio_url"] = _listener_audio_url(
                 dict(briefing, audio_url=create_audio(briefing, store, configured, MODE)))
             briefing["audio_status"] = "ready"
