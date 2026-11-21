@@ -109,7 +109,7 @@ Nothing is spoken that cannot be traced, and nothing is spoken that recommends a
 - **Extraction.** Live import sends one article per request to the small model and asks for figures with the verbatim sentence they come from and a short name for what each measures. A figure is kept only if its evidence is found in the article, the value and unit are printed in that evidence, and the name is built from the article's own words.
 - **Narration.** A briefing is assembled from those facts as "Name, amount." sentences. No model writes or rearranges a listener's briefing, so a figure cannot be attached to a different claim. Sources that give different values for one measure are both read and labelled as conflicting.
 - **Depth.** A story reads its headline and up to 3 named figures for a beginner, 5 for an intermediate listener and 7 for an advanced one. The figures are ranked in one fixed order, so those of a shallower level are always among those of a deeper one, and each language and level keeps its own citations. A story in which no figure can be named still reads at most three plain figures.
-- **No investment advice.** Stock picks, fund and ETF recommendations, an investment publisher's round-ups of its own picks, "should you buy" pieces, upgrades and downgrades, trading signals, price predictions, price outlooks ("could the price crash ...?", "what's next?" on a price story) and trader-sentiment pieces ("bulls" or "bears" in "control") are recognised by their headline and never selected. Inside a news report, a rating, a rank, a price target or a chart level (support, resistance) is never read out. The gate is deliberately wide: withholding a news story costs one story, reading out a recommendation costs trust. Every briefing opens by saying that the voice is synthetic and that it is not investment advice.
+- **No investment advice.** Stock picks, fund and ETF recommendations, an investment publisher's round-ups of its own picks, "should you buy" pieces, upgrades and downgrades, trading signals, price predictions, price outlooks ("could the price crash ...?", "what's next?" on a price story) and trader-sentiment pieces ("bulls" or "bears" in "control") are recognised by their headline and withheld from every briefing. The rules were checked by reading the titles on both sides. Of the withheld stories about nine in ten are clear recommendations, most of the rest are price-outlook pieces, and about 2% are ordinary news caught by mistake. Of the investment publisher's stories that are kept, a sample of 74 still held about 5% pick-like titles, so the gate is strict but not complete. Inside a news report, a rating, a rank, a price target or a chart level (support, resistance) is never read out. The gate is deliberately wide: withholding a news story costs one story, reading out a recommendation costs trust. Every briefing opens by saying that the voice is synthetic and that it is not investment advice.
 - **`audit-claims PATH`** re-reads the original feeds and checks every stored fact (evidence verbatim in its article, figure printed in the evidence, name in the article's words, source linked), every translated label, and every prepared narration (each spoken number is the value of a cited fact). It makes no provider call.
 
 ```powershell
@@ -117,7 +117,7 @@ $env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"
 ./.venv/Scripts/python.exe -m backend.app audit-claims "C:/path/event-data.zip"
 ```
 
-On the full event corpus (1,740 articles, 1,361 stories): 10,163 of 10,163 figures are verbatim in their article with the figure printed in the evidence; 6,382 of 6,382 measure names use the article's words; 1,261 translated headlines and 7,730 translated measure names pass their checks; 17,226 of 17,226 prepared narrations speak only cited figures; 655 stories are withheld as investment advice (the corpus is heavy with one investment publisher's stock-pick content); 637 stories can be spoken in each of the three languages.
+On the full event corpus (1,740 articles, 1,361 stories): 10,163 of 10,163 figures are verbatim in their article with the figure printed in the evidence; 6,382 of 6,382 measure names use the article's words; 1,261 translated headlines and 7,730 translated measure names pass their checks; 15,264 of 15,264 prepared narrations speak only cited figures; 725 stories are withheld as investment advice (the corpus is heavy with one investment publisher's stock-pick content); 567 stories can be spoken in each of the three languages.
 
 ## Shared recommendations and summaries
 
@@ -137,7 +137,7 @@ Briefings can be listened to in English, German (Deutsch) and Dutch (Nederlands)
 
 - **Narration.** Labels, units, currency words and the introduction are written in the listener's language, with decimal commas ("3,25 Prozent"). Figures come from the verified facts of whichever edition states them, so every sentence still cites its sources. A figure whose scale or unit cannot be read faithfully is left out instead of guessed. Examples are German "Billionen" (a trillion), "Tausend", "Prozentpunkte" and Dutch "biljoen", "duizend", "keer".
 - **Headlines.** A German or Dutch briefing shows each story under the title of its edition in that language and the voice reads it before the figures. Where a story has no edition in that language, a live corpus uses the checked translation of the headline (see *Labels in the listeners' other languages*) and marks it as translated. Without either, the original title stays as the heading and the voice reads no headline.
-- **Measure names.** A name the extraction model gave a figure is spoken in its article's language, and in another language through its checked translation. On the event corpus this took German and Dutch from 620 of 1,049 stories read as unnamed figures to 41 (German) and 42 (Dutch) of 637.
+- **Measure names.** A name the extraction model gave a figure is spoken in its article's language, and in another language through its checked translation. On the event corpus this took German and Dutch from 620 of 1,049 stories read as unnamed figures to 41 (German) and 42 (Dutch) of 567.
 - **Voices.** Live speech uses `eleven_multilingual_v2`, which speaks all three languages. Demo mode uses eSpeak NG's `de` and `nl` voices, or on Windows an installed System.Speech voice for that language. Without one it falls back to the English voice, so audio is always produced.
 - **Limits.** Translated labels are machine translations of short phrases; they are checked for numbers, not for style. The fixture (demo mode) has no translations, so there only stories with a German or Dutch edition get a localized headline. The listening quality of the offline voices is basic. Judge the final sound with ElevenLabs.
 
@@ -195,11 +195,11 @@ That is about $0.00056 per article. A weekday of 172 to 190 articles costs about
 
 | Daily listeners | Typical choices | Choices spread evenly (worst case) | Clips reused | If nothing were shared |
 |---|---|---|---|---|
-| 100 | $2.29 | $2.91 | 52% | $4.46 |
-| 1,000 | $0.85 | $1.05 | 82% | $4.38 |
-| 10,000 | $0.20 | $0.24 | 96% | $4.33 |
+| 100 | $2.30 | $2.94 | 52% | $4.49 |
+| 1,000 | $0.83 | $1.04 | 83% | $4.41 |
+| 10,000 | $0.19 | $0.22 | 96% | $4.36 |
 
-"Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 779,182 spoken facts were replayed to a listener who had already heard them, and 0 were spoken without their source. The month is extrapolated from the 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives $0.26 at 10,000 listeners.
+"Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 782,840 spoken facts were replayed to a listener who had already heard them, and 0 were spoken without their source. The month is extrapolated from the 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives $0.25 at 10,000 listeners.
 
 ```powershell
 $env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"

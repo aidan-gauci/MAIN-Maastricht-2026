@@ -10,8 +10,8 @@ Maze turns a publisher's business news into short audio briefings that differ pe
 | The same at ten times the volume | **$9.72** |
 | Audio per listener per month, 10,000 daily listeners | **$0.20** |
 | Spoken figures that are verbatim in their source article | **10,163 of 10,163** |
-| Prepared narrations that speak only cited figures | **17,226 of 17,226** |
-| Stories withheld because they are investment advice | **655 of 1,361** |
+| Prepared narrations that speak only cited figures | **15,264 of 15,264** |
+| Stories withheld because they are investment advice | **725 of 1,361** |
 | Model calls when a listener asks for a briefing | **0** |
 
 ## 1. Trust and accuracy (25)
@@ -20,9 +20,9 @@ Maze turns a publisher's business news into short audio briefings that differ pe
 
 - **Every claim links to its source.** In the Traces view each spoken sentence leads to the extracted fact, the verbatim sentence it came from, and the article with its link. To check three claims live: create a briefing, press *Trace claims* on any story, and open the source.
 - **Numbers are right because no model touches them after extraction.** The small model proposes a figure together with the sentence it copied it from. The figure is kept only if that sentence is found in the article and the value and unit are printed in it. `audit-claims` re-reads the original feeds: 10,163 of 10,163 stored figures are verbatim in their article, and 6,382 of 6,382 measure names are built from the article's own words.
-- **Nothing is invented.** A briefing is assembled from those facts as "Name, amount." sentences by ordinary code. No model writes or rearranges a listener's briefing, so a number cannot be attached to a different claim. All 17,226 prepared narrations (each of the 637 speakable stories in three languages, three depths and up to four angles) speak only figures that are cited, and each language and depth keeps its own citations.
+- **Nothing is invented.** A briefing is assembled from those facts as "Name, amount." sentences by ordinary code. No model writes or rearranges a listener's briefing, so a number cannot be attached to a different claim. All 15,264 prepared narrations (each of the 567 speakable stories in three languages, three depths and up to four angles) speak only figures that are cited, and each language and depth keeps its own citations.
 - **Disagreeing sources are flagged.** When two reports give different values for one measure, both are read, the story says "The reports give conflicting values", and the transcript and Traces view mark the conflict. The dataset has 5 such stories; all 5 are flagged.
-- **No investment advice.** The dataset is dominated by one investment publisher's stock-pick content. Maze recognises picks, fund and ETF recommendations, "should you buy" pieces, upgrades and downgrades, trading signals, price predictions, price outlooks ("could the price crash ...?", "what's next?" on a price story) and trader-sentiment pieces ("bulls" or "bears" in "control") by their headline and never selects them: 655 of 1,361 stories are withheld. Inside a news report, a rating, a price target or a chart level is never read out. Every briefing opens with: "This briefing is read by an AI voice. It reports figures from the cited sources and is not investment advice."
+- **No investment advice.** The dataset is dominated by one investment publisher's stock-pick content. Maze recognises picks, fund and ETF recommendations, "should you buy" pieces, upgrades and downgrades, trading signals, price predictions, price outlooks ("could the price crash ...?", "what's next?" on a price story) and trader-sentiment pieces ("bulls" or "bears" in "control") by their headline and withholds them: 725 of 1,361 stories, 699 of them from that one publisher. We read the titles on both sides to check the rules. About nine in ten withheld stories are clear recommendations, most of the rest are price-outlook pieces, and about 2% are ordinary news caught by mistake. Of that publisher's stories that are kept, a sample of 74 still held about 5% pick-like titles. Inside a news report, a rating, a price target or a chart level is never read out. Every briefing opens with: "This briefing is read by an AI voice. It reports figures from the cited sources and is not investment advice."
 - **Translations are checked too.** Headlines and measure names translated for German and Dutch listeners must repeat the numbers of the original and add none: 1,261 headlines and 7,730 names pass. A translated headline is marked as translated, with the original beside it.
 
 ## 2. Fit to the listener (20)
@@ -70,11 +70,11 @@ That is $0.00056 per article. No large model is used anywhere.
 
 | Daily listeners | Typical choices | Choices spread evenly (worst case) | Clips reused | If nothing were shared |
 |---|---|---|---|---|
-| 100 | $2.29 | $2.91 | 52% | $4.46 |
-| 1,000 | $0.85 | $1.05 | 82% | $4.38 |
-| 10,000 | **$0.20** | $0.24 | 96% | $4.33 |
+| 100 | $2.30 | $2.94 | 52% | $4.49 |
+| 1,000 | $0.83 | $1.04 | 83% | $4.41 |
+| 10,000 | **$0.19** | $0.22 | 96% | $4.36 |
 
-Audio cost per listener per month (30 daily briefings). "Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 779,182 spoken facts were replayed to a listener who had already heard them and 0 were spoken without their source. The month is extrapolated from 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives an upper bound of $0.26 at 10,000 listeners.
+Audio cost per listener per month (30 daily briefings). "Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 782,840 spoken facts were replayed to a listener who had already heard them and 0 were spoken without their source. The month is extrapolated from 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives an upper bound of $0.25 at 10,000 listeners.
 
 A story's clip is rendered the first time anyone needs it in a language, depth and voice, kept on disk under a key made from its text, language and voice, and reused by every later listener. That is why a repeat request plays at once while a new combination takes about 15 seconds, once. The cost per listener therefore falls as the audience grows. Playback speed is changed in the player on the existing file, so it is free.
 
@@ -92,7 +92,7 @@ A story's clip is rendered the first time anyone needs it in a language, depth a
 
 ## 6. Path to product (10)
 
-- **Who pays.** A news publisher or licensor that already owns the reporting. Maze is a way to sell the same articles again as a personal audio product: to subscribers as a retention feature, or to professional clients as a per-seat briefing. At 10,000 daily listeners the audio costs about $0.20 per listener per month (about $1,970 a month in total) and preparation is under a dollar a day.
+- **Who pays.** A news publisher or licensor that already owns the reporting. Maze is a way to sell the same articles again as a personal audio product: to subscribers as a retention feature, or to professional clients as a per-seat briefing. At 10,000 daily listeners the audio costs about $0.19 per listener per month (about $1,880 a month in total) and preparation is under a dollar a day.
 - **Newsroom workflow.** Overnight batch: import the day's articles (minutes, cents). Morning: an editor opens the Evidence view, sees each story with its figures, sources, conflicts and what was withheld, and can pull a story. Listeners then get briefings on demand; audio is rendered on first request and shared.
 - **Synthetic voice disclosure.** Spoken at the start of every briefing, shown on the player ("AI-generated narration") and in *About this audio*.
 - **Rights.** Article text is not stored after import. A briefing speaks only headlines and figures; the trace shows the one sentence a figure came from, with a link back to the publisher. One command purges everything.
@@ -103,5 +103,5 @@ A story's clip is rendered the first time anyone needs it in a language, depth a
 - Narration is still a list of named figures by design, now three, five or seven per story by level. It does not explain why a number moved; doing that without inventing would need a second verified layer.
 - Translated labels are machine translations of short phrases, checked for numbers but not for style.
 - The largest event thread (37 reports about one company) is broader than a single event.
-- The advice gate is a set of headline and phrase rules. It is wide on purpose and withholds some ordinary news.
+- The advice gate is a set of headline and phrase rules. It is wide on purpose and withholds some ordinary news (about 2% of what it withholds), and it is not complete: about 5% of the investment publisher's kept stories in a sample still read like picks. A production gate would classify the article, not only its headline.
 - The prototype runs on one server with SQLite. Scheduled delivery runs from a timer inside that server, so a schedule is kept only while the process runs and the first delivery is at least 30 minutes away. A production service would move this to a durable scheduler.

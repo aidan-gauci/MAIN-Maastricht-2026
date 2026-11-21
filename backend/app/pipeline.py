@@ -266,6 +266,22 @@ _ADVICE_HEADLINE = re.compile("|".join((
     r"\b(?:prices?|stocks?|shares?|gold|silver|oil|crude|bitcoin|btc|ether|xrp|crypto\w*|dollar|euro|yen|index)\b.*\bwhat['’]?s\s+next\b",
     r"\b(?:bulls?|bears?)\b.*\bcontrol\b",
     r"\bdon['’]?t\s+overlook\b|\bthese\s+\d+\s|\bthese\s+(?:etfs?|stocks?|funds?)\b|\bbuying\s+opportunity\b|\b(?:buy|sell|hold)['’\"”]?\s+rating\b|\bfor\s+(?:\w+\s+)?investors\s*\?",
+    # Shapes a read-through of the kept stories found: a quoted verdict, a three-way verdict, a numbered
+    # list anywhere in the title or of other holdings, calls to act, and the publisher's screening series.
+    r"\ba\s+['\"‘“]?(?:buy|sell)['\"’”]?(?:\s+(?:ahead|now|before|after)\b|\s*\?)|\bbuy,\s*sell,?\s*or\s+hold\b",
+    r"\b\d+\s+(?:[\w&'’.-]+\s+){0,5}?(?:stocks?|funds?|etfs?|reits?|banks?|firms?|companies|names|picks?)\s+"
+    r"(?:to\s+(?:watch|buy|consider|own|bet\s+on|play|add)|(?:poised|set|likely)\s+to\s+(?:top|beat|outperform|gain)|"
+    r"worth\s+(?:buying|watching|a\s+look))\b",
+    r"\btime\s+to\s+(?:buy|sell|cash\s+out|invest)\b|\bworth\s+buying\b|\bbefore\s+betting\b|^\W*bet\s+on\b",
+    r"\bthese\s+(?:[\w-]+\s+){1,2}(?:etfs?|stocks?|funds?)\b|\boptions\s+market\s+predicting\b|\btrending\s+stock\b",
+    r"\boutperforming\s+other\b|\blife-changing\s+gains\b|\bstay\s+bullish\b|\binvestment\s+opportunity\b",
+    r"^\W*invest\s+in\s+\w|\bbuy\s+(?:it|them)\s+now\b|\bbuy\s+the\s+dip\b[^?]*\?|\bbrokers\s+suggest\b|\bplacing\s+a\s+bet\b",
+    r"\b\d+\s+(?:[\w&'’.-]+\s+){0,5}?(?:stocks?|funds?|etfs?|reits?)\s+poised\b|\breasons\s+stocks?\s+could\b",
+    r"\boptions\s+traders\b|\binvestors\s+heavily\s+search\b|\betfs?\s+(?:areas?\s+)?in\s+focus\b|\betf\s+lens\b",
+    r"\blong-term\s+opportunity\b|\bcan\s+it\s+continue\b",
+    r"\ba\s+['\"‘“]?(?:buy|sell)['\"’”]?\s+as\b|\bbuy,\s*hold\b|\bupside\s+in\b|\banalysts\s+predict\b|\bgood\s+investment\b",
+    r"\bstill\s+attractive\b|\bhidden\s+gems?\b|\betfs?\s+likely\s+to\b|\bstock\s+portfolio\b|\binsider\s+signal\b",
+    r"\bwill\s+this\s+strength\s+last\b|\bmomentum\s+keep\b|\bwall\s+street\s+analysts\s+expect\b|\bstrong\s+potential\b",
     r"\b(?:aktien|aandelen)\s+(?:zum\s+kaufen|om\s+te\s+kopen)\b|\bkaufempfehlung\b|\bkoopadvies\b",
 )), re.I)
 
@@ -278,11 +294,34 @@ _ADVICE_FIGURE = re.compile(
     r"(?:support|resistance)\s+(?:levels?|zones?|lines?|at|near|around)|(?:key|major|primary|strong|immediate|next)\s+"
     r"(?:support|resistance)|(?:demand|supply)\s+zone|psychological\s+(?:level|mark|barrier)|"
     r"stop[- ]loss|take[- ]profit|(?:golden|death)\s+cross|fibonacci|retracement|"
-    r"unterstützungs(?:zone|niveau|marke)|widerstands(?:zone|niveau|marke)|steunniveau|weerstandsniveau)\b", re.I)
+    r"unterstützungs(?:zone|niveau|marke)|widerstands(?:zone|niveau|marke)|steunniveau|weerstandsniveau|"
+    # What a target or a model says a price could do is a forecast to act on, not a reported fact: implied upside
+    # or downside, fair or intrinsic value, under- or overvaluation, buy zones and entry points, conviction lists,
+    # index and price objectives, broker scores, expected returns, and chart readings (moving averages, breakouts).
+    r"upside|downside|(?:fair|intrinsic)\s+value|under-?valued|over-?valued|undervaluation|overvaluation|"
+    r"(?:buy|entry|accumulation|sell)\s+(?:zone|point|range|level)s?|conviction\s+(?:list|buy|pick)|top\s+picks?|"
+    r"price\s+objectives?|(?:index|year-end|(?:\d+|six|twelve)-month)\s+(?:[\w$-]+\s+)?targets?|(?:recovery|rebound|next|upside|"
+    r"downside|bullish|bearish)\s+targets?|(?:higher|lower|next|key|major)\s+(?:resistance|support)|"
+    r"(?:senkte|hob|erhöhte|kappte|bestätigte)\s+(?:das|sein|ihr)\s+ziel\s+(?:von|auf)\s+[$€£]|"
+    r"(?:verlaagde|verhoogde|bevestigde)\s+(?:zijn|haar|het)\s+doel\s+(?:van|naar)\s+[$€£]|"
+    r"\b(?:cut|cuts|raised|raises|lowered|lowers|lifted|lifts|trimmed|trims|slashed|slashes)\s+(?:its|their|the)\s+"
+    r"(?:[\w$-]+\s+){0,2}?target\s+(?:to|from)\s+[$€£]|targets?\s+(?:for|on|of)\s+the\s+(?:s&p|nasdaq|dow|index)|"
+    r"(?:average\s+)?broker(?:age)?\s+(?:recommendation|rating|score)|\babr\b|consensus\s+(?:rating|recommendation)|"
+    r"earnings\s+esp|expected\s+(?:return|gain)s?|potential\s+(?:return|gain|upside|rally)s?|implied\s+(?:return|gain|move)s?|"
+    r"(?:bull|bear)\s+case|(?:\d+|fifty|hundred|two-hundred)[- ]day\s+(?:moving\s+)?averages?|moving\s+averages?|"
+    r"breakout|break-?down\s+level|trend\s?line|overbought|oversold|relative\s+strength\s+index|\brsi\b|"
+    r"aufwärtspotenzial|abwärtspotenzial|kurspotenzial|kaufempfehlung|verkaufsempfehlung|fairer\s+wert|unterbewertet|überbewertet|"
+    r"opwaarts\s?potentieel|neerwaarts\s?potentieel|koopadvies|verkoopadvies|reële\s+waarde|ondergewaardeerd|overgewaardeerd|"
+    r"koersdoelen|kursziele)\b", re.I)
+
+
+# A digest lists the day's news in one headline; a rating mentioned in it is news, not a call to act.
+_DIGEST_HEADLINE = re.compile(r"^\W*(?:evening|morning|daily|weekly)\s+digest\b", re.I)
 
 
 def is_investment_advice(story: dict[str, Any]) -> bool:
-    return bool(_ADVICE_HEADLINE.search(str(story.get("title", ""))))
+    title = str(story.get("title", ""))
+    return bool(_ADVICE_HEADLINE.search(title)) and not _DIGEST_HEADLINE.search(title)
 
 
 def is_advice_figure(fact: dict[str, Any]) -> bool:

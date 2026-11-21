@@ -58,7 +58,7 @@ function postResponse(page, path) {
   );
 }
 
-test('built listener generates briefings, traces evidence, shows costs, and recovers missing audio', { timeout: 75_000 }, async t => {
+test('built listener generates briefings, traces evidence, shows costs, and recovers missing audio', { timeout: 120_000 }, async t => {
   await readFile(join(repoRoot, 'frontend', 'dist', 'index.html'));
   const dataDirectory = await mkdtemp(join(tmpdir(), 'briefing-browser-'));
   const origin = await startServer(t, dataDirectory);
@@ -388,5 +388,75 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   const storyButton = page.locator(`#evidence-story-${listened.id}`);
   assert.equal(await storyButton.getAttribute('aria-expanded'), 'true');
   await page.waitForFunction(id => document.activeElement?.id === id, `evidence-story-${listened.id}`);
+
+  // Schedule delivery: save a saved profile daily, then a custom selection; both survive a reload.
+  // This is a fresh listener, so no schedule exists yet. The server only arms a local timer, which a
+  // delivery time about twelve hours away keeps from ever firing during the test.
+  await page.getByRole('button', { name: 'Listen', exact: true }).click();
+  const scheduleListener = await page.evaluate(() => localStorage.getItem('briefing-listener-id'));
+  const schedulePath = `/api/listeners/${scheduleListener}/schedule`;
+  const scheduleForm = page.locator('.schedule-fields');
+  const openSchedule = async () => {
+    await page.getByRole('img', { name: 'Maze' }).waitFor();
+    await page.getByRole('button', { name: 'Listen', exact: true }).click();
+    if (!await scheduleForm.isVisible()) await page.locator('summary', { hasText: 'Schedule delivery' }).click();
+    await scheduleForm.waitFor();
+  };
+  await openSchedule();
+  const timezone = await scheduleForm.getByLabel('Time zone (IANA)').inputValue();
+  assert.ok(timezone, 'the form defaults to the browser time zone');
+  const deliveryTime = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .format(new Date(Date.now() + 12 * 3_600_000));
+  const saveButton = scheduleForm.getByRole('button', { name: /^Save (delivery schedule|schedule changes)$/ });
+  assert.equal(await saveButton.innerText(), 'Save delivery schedule', 'no schedule is saved yet');
+  await scheduleForm.getByLabel('What to deliver').selectOption('markets');
+  await scheduleForm.getByLabel('Cadence').selectOption('daily');
+  await scheduleForm.getByLabel('Local delivery time').fill(deliveryTime);
+  const putResponse = () => page.waitForResponse(response =>
+    new URL(response.url()).pathname === schedulePath && response.request().method() === 'PUT');
+  const [savedResponse] = await Promise.all([putResponse(), saveButton.click()]);
+  assert.equal(savedResponse.status(), 200);
+  const savedBody = savedResponse.request().postDataJSON();
+  assert.equal(savedBody.profile_id, 'markets');
+  assert.equal(savedBody.wildcard, undefined, 'a saved profile carries no custom selection');
+  assert.equal(savedBody.cadence, 'daily');
+  assert.equal(savedBody.weekday, null);
+  assert.equal(savedBody.local_time, deliveryTime);
+  assert.equal(savedBody.timezone, timezone);
+  const saved = (await savedResponse.json()).schedule;
+  assert.equal(saved.schedule_version, 1);
+  assert.equal(saved.profile_id, 'markets');
+  await scheduleForm.getByText('Delivery schedule saved.', { exact: true }).waitFor();
+  await scheduleForm.getByText(/^Scheduler status: /).waitFor();
+  await scheduleForm.getByText(`(${timezone})`).waitFor();
+  assert.equal(await saveButton.innerText(), 'Save schedule changes');
+
+  // After a reload the form shows what GET returns.
+  await page.reload();
+  await openSchedule();
+  const stored = (await (await page.request.get(`${origin}${schedulePath}`)).json()).schedule;
+  assert.deepEqual([stored.profile_id, stored.cadence, stored.local_time, stored.timezone, stored.schedule_version], ['markets', 'daily', deliveryTime, timezone, 1]);
+  assert.equal(await scheduleForm.getByLabel('What to deliver').inputValue(), 'markets');
+  assert.equal(await scheduleForm.getByLabel('Cadence').inputValue(), 'daily');
+  assert.equal(await scheduleForm.getByLabel('Local delivery time').inputValue(), deliveryTime);
+  assert.equal(await scheduleForm.getByLabel('Time zone (IANA)').inputValue(), timezone);
+  assert.equal(await saveButton.innerText(), 'Save schedule changes');
+
+  // Switch to a custom selection: topics, depth and length replace the profile, and the version goes up.
+  await scheduleForm.getByLabel('What to deliver').selectOption({ label: 'Custom briefing' });
+  assert.equal(await saveButton.isDisabled(), true, 'a custom schedule needs a topic');
+  await scheduleForm.getByText('Choose at least one topic to schedule a custom briefing.').waitFor();
+  const scheduleTopic = scheduleForm.locator('.schedule-topics .topic-pill').first();
+  await scheduleTopic.click();
+  assert.equal(await scheduleTopic.getAttribute('aria-pressed'), 'true');
+  await scheduleForm.getByLabel('Depth').selectOption('advanced');
+  await scheduleForm.getByLabel('Length').selectOption('8');
+  const [customSaved] = await Promise.all([putResponse(), saveButton.click()]);
+  assert.equal(customSaved.status(), 200);
+  const customBody = customSaved.request().postDataJSON();
+  assert.equal('profile_id' in customBody, false, 'a custom selection carries no profile_id');
+  assert.deepEqual(customBody.wildcard, { topics: [(await scheduleTopic.textContent()).trim()], expertise: 'advanced', duration: 8, language: 'en' });
+  assert.equal((await customSaved.json()).schedule.schedule_version, 2);
+  await scheduleForm.getByText('Delivery schedule saved.', { exact: true }).waitFor();
   assert.deepEqual(pageErrors, []);
 });

@@ -41,7 +41,20 @@ class NoInvestmentAdviceTest(unittest.TestCase):
                       "GBP/CHF signal: forecast while the franc rallies", "Zorbo price prediction as momentum fades",
                       "ZRB/QRX has printed a golden cross while the crown slides",
                       "Zorbo bulls lose their grip: could the price crash under 2 crowns?",
-                      "Silver edges up from a six-month low: what's next?", "Zorbo stalls under 40 crowns as bears keep control"):
+                      "Silver edges up from a six-month low: what's next?", "Zorbo stalls under 40 crowns as bears keep control",
+                      "Is Zorbo (ZRB) a 'Buy' Before Results?", "Buy, Sell, or Hold Zorbo Stock After Results?",
+                      "Rates and Tailwinds: 3 Regional Banks to Watch", "3 Storage REITs to Watch",
+                      "4 Logistics Firms Poised to Beat Forecasts", "Zorbo Climbs to a Yearly High: Time to Cash Out?",
+                      "Is Zorbo Worth Buying Now as Orders Grow?", "Bet on These Shipping Funds as Rates Climb",
+                      "Options Market Predicting a Zorbo Jump?", "Why Zorbo Became a Trending Stock This Week",
+                      "Estimates Rise for Zorbo (ZRB): Time to Buy?", "Is Zorbo Outperforming Other Chip Stocks?",
+                      "Invest in 2 Quarx Funds for Steady Growth", "Zorbo Tumbles: Buy It Now?", "Zorbo Slips on Supply Woes: Buy the Dip?",
+                      "Brokers Suggest Investing in Zorbo (ZRB)", "Quarx & 3 Grocery Stocks Poised for Gains", "5 Reasons Stocks Could Climb by Spring",
+                      "What Options Traders See in Zorbo", "Investors Heavily Search Zorbo (ZRB): What to Know",
+                      "Trade Talks Advance: ETF Areas in Focus", "Zorbo Up 2% Since Its Last Report: Can It Continue?",
+                      "Is Zorbo (ZRB) a Buy as Brokers Turn Upbeat?", "Zorbo Shares: Buy, Hold or Step Aside?",
+                      "Analysts Predict a 40% Upside in Zorbo (ZRB)", "Is Zorbo Still Attractive at This Price?",
+                      "Chip ETFs: Hidden Gems in the Selloff?", "Zorbo Adds 9%: Will This Strength Last?"):
             with self.subTest(title=title):
                 self.assertTrue(pipeline.is_investment_advice({"title": title}))
                 self.assertEqual(pipeline._trust_eligible(story("s", title)), (False, "investment advice, not news"))
@@ -52,7 +65,9 @@ class NoInvestmentAdviceTest(unittest.TestCase):
                       "Zorbo stock jumps 13% as chipmaker raises annual forecast", "Bitcoin ETFs see record inflows",
                       "Jobless claims hit 1971 lows as output surges", "Zorbo (ZRB) Beats Q2 Earnings Estimates",
                       "Coalition talks collapse: what's next?", "Central bank says growth will recover next year",
-                      "Rebels take control of the northern port"):
+                      "Rebels take control of the northern port", "5 firms to cut 2,000 jobs as orders fall",
+                      "Evening digest: Zorbo chief may return, Quarx wins first buy rating", "Central banks to watch inflation data",
+                      "Investors bet on a December rate cut", "Why Is Zorbo (ZRB) Down 6% Since Its Last Report?"):
             with self.subTest(title=title):
                 self.assertFalse(pipeline.is_investment_advice({"title": title}))
                 self.assertEqual(len(pipeline.rank([story("s", title)], LISTENER)), 1)

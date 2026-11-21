@@ -403,3 +403,84 @@ class DeliveryTest(unittest.TestCase):
         self.store.initialize()
         self.assertIsNone(self.store.schedule(self.listener)["wildcard"])
         self.assertEqual(envelope["schedule_id"], self.store.schedule(self.listener)["schedule_id"])
+
+    # The local timer calls _run_local_schedule with the envelope it was armed with.
+    def armed_schedules(self):
+        return [call.args[0] for call in main._arm_local_schedule.call_args_list]
+
+    def test_local_timer_completes_the_run_and_arms_the_next_occurrence(self):
+        envelope = self.save()
+        self.clock.return_value = as_datetime(envelope["generation_at"])
+        main._arm_local_schedule.reset_mock()
+        with patch.object(service, "create_audio", side_effect=self.fake_audio) as synthesize:
+            main._run_local_schedule(envelope)
+            synthesize.assert_called_once()
+        self.assertEqual(self.store.briefing_count(), 1)
+        self.assertEqual(self.store.scheduled_run(main.scheduled_run_id(envelope))["status"], "completed")
+        [armed] = self.armed_schedules()
+        self.assertEqual(armed["schedule_id"], envelope["schedule_id"])
+        self.assertEqual(armed["schedule_version"], envelope["schedule_version"])
+        self.assertGreater(as_datetime(armed["delivery_at"]), as_datetime(envelope["delivery_at"]))
+
+    def test_local_timer_firing_early_re_arms_the_same_schedule_without_a_failure(self):
+        envelope = self.save()
+        main._arm_local_schedule.reset_mock()
+        with patch.object(main, "_finish_or_fail") as finish:
+            main._run_local_schedule(envelope)
+        finish.assert_not_called()
+        [armed] = self.armed_schedules()
+        self.assertEqual({field: armed[field] for field in ENVELOPE_FIELDS}, envelope)
+        self.assertIsNone(self.store.scheduled_run(main.scheduled_run_id(envelope)))
+        self.assertEqual(self.store.briefing_count(), 0)
+
+    def test_local_timer_records_an_unexpected_error_and_keeps_the_recurrence(self):
+        envelope = self.save()
+        self.clock.return_value = as_datetime(envelope["generation_at"])
+        main._arm_local_schedule.reset_mock()
+        with patch.object(main, "generate_briefing", side_effect=RuntimeError("boom")):
+            main._run_local_schedule(envelope)
+        self.assertEqual(self.store.scheduled_run(main.scheduled_run_id(envelope))["status"], "failed")
+        self.assertEqual(self.store.briefing_count(), 0)
+        [armed] = self.armed_schedules()
+        self.assertEqual(armed["schedule_version"], envelope["schedule_version"])
+        self.assertGreater(as_datetime(armed["delivery_at"]), as_datetime(envelope["delivery_at"]))
+
+    def test_local_timer_for_an_old_version_publishes_and_re_arms_nothing(self):
+        superseded = self.save()
+        self.save(local_time="13:00")
+        self.clock.return_value = as_datetime(superseded["generation_at"])
+        main._arm_local_schedule.reset_mock()
+        with patch.object(service, "create_audio", side_effect=self.fake_audio) as synthesize:
+            main._run_local_schedule(superseded)
+            synthesize.assert_not_called()
+        self.assertEqual(self.store.briefing_count(), 0)
+        main._arm_local_schedule.assert_not_called()
+
+    def test_startup_arms_every_saved_schedule_when_n8n_is_not_configured(self):
+        self.save()
+        other = self.client.put(self.listener_path("schedule", self.other_listener), json=self.settings)
+        self.assertEqual(other.status_code, 200, other.text)
+        main._arm_local_schedule.reset_mock()
+        with TestClient(main.app):
+            pass
+        self.assertEqual(
+            {schedule["listener_id"] for schedule in self.armed_schedules()},
+            {self.listener, self.other_listener},
+        )
+        self.assertEqual(main._arm_local_schedule.call_count, 2)
+
+    def test_startup_arms_nothing_when_n8n_owns_the_schedules(self):
+        self.save()
+        main._arm_local_schedule.reset_mock()
+        with patch.dict(os.environ, {"BRIEFING_N8N_WEBHOOK_URL": "https://example.test/webhook/briefing-schedule"}):
+            with TestClient(main.app):
+                pass
+        main._arm_local_schedule.assert_not_called()
+
+    def test_shutdown_cancels_the_local_timers(self):
+        timer = Mock()
+        with patch.object(main, "local_timers", {"schedule-id": timer}) as timers:
+            with TestClient(main.app):
+                timer.cancel.assert_not_called()
+            timer.cancel.assert_called_once()
+            self.assertEqual(timers, {})
