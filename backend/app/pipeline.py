@@ -33,7 +33,7 @@ def fixture_articles() -> list[dict[str, Any]]:
     ]
 
 
-_UNIT_PATTERN = r"(?:per\s+megawatt[- ]hour|basis\s+points?|basispunkte|basispunten|million\s+crowns?|miljoen\s+kronen|millionen\s+kronen|milliarden\s+euro|miljard\s+euro|megawatt[- ]hours?|megawatts?|applications?|anträge|aanvragen|billion|million|bn|mn|percent|per\s+cent|prozent|procent|%|milliarden|millionen|miljard|miljoen|crowns?|kronen|euro|euros|eur|workers?|jobs?|hours?|days?|years?|meetings?)"
+_UNIT_PATTERN = r"(?:per\s+megawatt[- ]hour|basis\s+points?|basispunkte|basispunten|basispunkt|basispunt|million\s+crowns?|miljoen\s+kronen|millionen\s+kronen|milliarden\s+euro|miljard\s+euro|megawatt[- ]hours?|megawatts?|applications?|anträge|aanvragen|billion|million|bn|mn|percent|per\s+cent|prozent|procent|%|milliarden|milliarde|millionen|miljard|miljoen|crowns?|kronen|euro|euros|eur|workers?|jobs?|hours?|days?|years?|meetings?)"
 _NUM = re.compile(rf"(?<![\w])(?:€\s*)?[−-]?\d+(?:[.,]\d+)*(?:\s*{_UNIT_PATTERN})?", re.I)
 _NUMBER = re.compile(r"[−-]?\d+(?:[.,]\d+)*")
 _WORDS = re.compile(r"\b(?:revenue|sales|turnover|umsatz|omzet|profit|winst|gewinn|rate|policy rate|inflation|percent|per cent|billion|million|miljard|milliarden|miljoen|millionen|growth|forecast|prognose|groeiverwachting|wachstumsprognose|exports?|exporte?|export|jobs?|arbeitsplätze|banen|budget|grant|applications?|anträge|aanvragen|workers?|arbeitnehmer|werknemers|wage|pay rise|lohn|loon|prices?|preise|prijzen|prices?|energy|energie|capacity|megawatts?|receipt|receipts|nächtigungen|stays|loans?|krediet|kredite|overdue|überfällig|tourism|tourismus|toerisme|investment|investition|industrie|household|haushalt|huishouden|saving|savings|sparen|rates?|rente|leitzins|policy rate|basis points?|basispunkte|basispunten|crown|crowns|million|billion|percent|prozent|procent)\b", re.I)
@@ -361,7 +361,7 @@ def _canonical_unit(unit: str) -> str:
     value = re.sub(r"\s+", " ", str(unit).strip().lower())
     aliases = {
         "%": "percent", "per cent": "percent", "prozent": "percent", "procent": "percent",
-        "milliarden": "billion", "miljard": "billion", "millionen": "million", "miljoen": "million",
+        "milliarden": "billion", "milliarde": "billion", "miljard": "billion", "millionen": "million", "miljoen": "million",
         "bn": "billion", "mn": "million", "euros": "euro", "eur": "euro",
         "crowns": "crown", "kronen": "crown", "worker": "workers", "job": "jobs",
         "megawatt hour": "megawatt-hour", "per megawatt hour": "per megawatt-hour",
@@ -1069,7 +1069,7 @@ _MEASURE_LABELS = (
     (r"(?:operating )?profit|gewinn|winst", {"en": "profit", "de": "Gewinn", "nl": "winst"}),
     (r"growth forecast|wachstumsprognose|groeiverwachting", {"en": "growth forecast", "de": "Wachstumsprognose", "nl": "groeiverwachting"}),
     (r"policy rate|leitzins|beleidsrente", {"en": "policy rate", "de": "Leitzins", "nl": "beleidsrente"}),
-    (r"basis points?|basispunkte|basispunten", {"en": "rate change", "de": "Zinsänderung", "nl": "renteverandering"}),
+    (r"basis points?|basispunkte|basispunten|basispunkt|basispunt", {"en": "rate change", "de": "Zinsänderung", "nl": "renteverandering"}),
     (r"inflati(?:on|e)|teuerung", {"en": "inflation", "de": "Inflation", "nl": "inflatie"}),
     (r"pay rise|wage|lohn|loon", {"en": "pay increase", "de": "Lohnerhöhung", "nl": "loonsverhoging"}),
     (r"jobs?|arbeitsplätze|banen", {"en": "jobs", "de": "Arbeitsplätze", "nl": "banen"}),
@@ -1106,10 +1106,13 @@ _RANGE_TO_AFTER = re.compile(r"\s*(?:auf|bis|naar|tot|to)\s+[−€\d-]")
 _ALSO_BEFORE = re.compile(r"\b(?:and|und|en|or|oder)\s+$")
 _RANGE_JOIN = re.compile(r"\s*(?:to|and|or|auf|bis|und|oder|naar|tot|en)\s+(?=[−€\d-])")
 # The figure pattern cuts "Millionen" short at "million", so an "en" may remain before the currency.
-_CURRENCY_AFTER = re.compile(r"(?:en)?\s+(?:of\s+)?(crowns?|kronen|euros?|euro|dollars?|pounds?)\b")
+_CURRENCY_AFTER = re.compile(
+    r"(?:en)?\s+(?:of\s+)?((?:us[- ])?dollars?|crowns?|kronen|krone|kroon|euros?|pounds?|pfund|pond)\b"
+)
 _CURRENCY_NAMES = {
-    "crown": "crown", "crowns": "crown", "kronen": "crown", "euro": "euro", "euros": "euro",
-    "dollar": "dollar", "dollars": "dollar", "pound": "pound", "pounds": "pound",
+    "crown": "crown", "crowns": "crown", "kronen": "crown", "krone": "crown", "kroon": "crown",
+    "euro": "euro", "euros": "euro", "dollar": "dollar", "dollars": "dollar",
+    "pound": "pound", "pounds": "pound", "pfund": "pound", "pond": "pound",
 }
 _CURRENCY_SYMBOLS = {"$": "dollar", "£": "pound", "€": "euro"}
 # A range ("2-3%", "between 2 and 3 percent") is one claim, not two figures.
@@ -1118,11 +1121,14 @@ _RANGE_AND = re.compile(r"\s*(?:and|und|en)\s*[$£€]?\s*")
 _BETWEEN_BEFORE = re.compile(r"\b(?:between|zwischen|tussen)\s+[$£€]?\s*$")
 # The figure pattern does not know every scale or multiple. A bare number followed by one ("165k", "$1.5T",
 # "18.5x", "25 bps") would be spoken a thousand times too small or without its meaning, so it is not spoken.
+# German "Billion" and Dutch "biljoen" are a trillion, "Tausend"/"duizend" a thousand, "Mal"/"keer" a multiple.
 _UNRECOGNISED_SUFFIX = re.compile(
-    r"[a-zA-Z×¢]|\s+(?:k|m|b|t|bn|mn|tn|trn|mio|mrd|mln|mld|x|trillion|thousand|hundred|bps?|bips|cents?|pence|times|fold|pct)\b",
+    r"[a-zA-Z×¢]|\s+(?:k|m|b|t|bn|mn|tn|trn|mio|mrd|mln|mld|x|trillion|thousand|hundred|bps?|bips|cents?|pence|times|fold|pct"
+    r"|billionen?|biljoen(?:en)?|tausend|tsd|duizend|mal|maal|keer)\b",
     re.I,
 )
-_PERCENTAGE_POINTS = re.compile(r"age\s+points?\b")
+# "percentage points", "Prozentpunkte", "procentpunten": a difference between two percentages, not a percentage.
+_PERCENTAGE_POINTS = re.compile(r"(?:age\s+points?|punkt(?:e|en)?|punt(?:en)?)\b")
 # Measures that are themselves percentages. A percentage beside "revenue" or "profit" is a change or a ratio.
 _PERCENT_MEASURES = frozenset({
     "growth forecast", "policy rate", "inflation", "pay increase", "saving rate", "food prices", "overdue farm loans",
@@ -1130,6 +1136,28 @@ _PERCENT_MEASURES = frozenset({
 _PER_HOUR_AFTER = re.compile(r"\s+per\s+megawatt[- ]hour\b")
 _PER_HOUR = " per megawatt-hour"
 _PREVIOUS_LABEL = {"en": "previous {}", "de": "{} zuvor", "nl": "{} eerder"}
+
+
+_COMMA_GROUPED = re.compile(r"[1-9]\d{0,2}(?:,\d{3})+")
+_ONE_DOT_GROUP = re.compile(r"\d{1,3}\.\d{3}")
+_SCALE_WORD = re.compile(r"(?:million|billion|bn|mn|millionen|milliarden|milliarde|miljoen|miljard)", re.I)
+
+
+def _unclear_separator(raw: str, unit: str, language: str) -> bool:
+    """A German or Dutch number that English separators would make mean something quite different.
+
+    Translated editions of English articles often keep English formatting: "$70,000" and "12,600 werknemers"
+    are thousands, "$17.942 miljard" and "1.216 million" are decimals. A listener reads "70,000" as seventy and
+    "17.942 miljard" as 17,942 billion. Such a figure is left out; the English edition states it unambiguously.
+    A dot before exactly three digits stays a thousands separator unless a scale word follows or the number
+    starts with zero, so "12.400 Arbeitsplätze" is still spoken.
+    """
+    if language not in {"de", "nl"}:
+        return False
+    digits = raw.lstrip("−-")
+    if _COMMA_GROUPED.fullmatch(digits):
+        return True
+    return bool(_ONE_DOT_GROUP.fullmatch(digits)) and (digits.startswith("0.") or bool(_SCALE_WORD.match(unit)))
 
 
 class _Amount(NamedTuple):
@@ -1161,8 +1189,13 @@ def _evidence_amounts(text: str, language: str) -> list[_Amount]:
         before, after = text[:match.start()], text[match.end():]
         previous = bool(_PREVIOUS_BEFORE.search(before)) or bool(_RANGE_FROM_BEFORE.search(before) and _RANGE_TO_AFTER.match(after))
         quantity = (_canonical_number(raw, language), _canonical_unit(unit))
-        misunderstood = (not quantity[1] and bool(_UNRECOGNISED_SUFFIX.match(after))) or (
-            quantity[1] == "percent" and bool(_PERCENTAGE_POINTS.match(after))
+        # The unit pattern reads a German "Billion" (10^12) as the English billion (10^9), a thousandfold error.
+        german_billion = language == "de" and unit.lower().startswith("billion")
+        misunderstood = (
+            german_billion
+            or _unclear_separator(raw, unit, language)
+            or (not quantity[1] and bool(_UNRECOGNISED_SUFFIX.match(after)))
+            or (quantity[1] == "percent" and bool(_PERCENTAGE_POINTS.match(after)))
         )
         amounts.append(_Amount(match.start(), match.end(), quantity, previous, not misunderstood))
     for index in range(len(amounts) - 1):
@@ -1195,7 +1228,7 @@ def _complete_unit(text: str, amount: _Amount) -> str:
         return shared or symbol_currency
     if unit in {"million", "billion"}:
         if currency := _CURRENCY_AFTER.match(text, end):
-            unit, end = f"{unit} {_CURRENCY_NAMES[currency.group(1)]}", currency.end()
+            unit, end = f"{unit} {_CURRENCY_NAMES[re.sub(r'^us[- ]', '', currency.group(1))]}", currency.end()
         elif symbol_currency:
             unit = f"{unit} {symbol_currency}"
     if unit.rsplit(" ", 1)[-1] in set(_CURRENCY_NAMES.values()) and _PER_HOUR_AFTER.match(text, end):
@@ -1379,8 +1412,8 @@ def _unit_phrase(unit: str, number: str, language: str) -> tuple[str, set[str]] 
 
 def _spoken_amount(fact: dict[str, Any], figure: _Figure, source_language: str, language: str) -> str:
     number = _spoken_number(str(fact["value"]), source_language, language)
-    canonical = _value_unit(fact["value"], "", source_language)[0]
-    phrase = _unit_phrase(figure.unit, canonical, language)
+    # The unit agrees with the number as spoken: "1 Million" but "1,0 Millionen" and "1.0 crowns".
+    phrase = _unit_phrase(figure.unit, number, language)
     if phrase is None:
         return f"{number} {fact.get('unit') or figure.unit}".strip()
     unit, nouns = phrase
@@ -1520,15 +1553,34 @@ def introduce_once(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for index, segment in enumerate(segments)]
 
 
-def spoken_text(segment: dict[str, Any], headline: str, language: str) -> str:
+def localized_headline(story: dict[str, Any], language: str) -> tuple[str, str | None]:
+    """The story's title for a listener's language, and that language when the title is known to be in it.
+
+    English briefings keep the story title. For German and Dutch the title of a member article published in
+    that language is used (most stories have translated editions). Without one the story title stays, as the
+    transcript heading, and no language is claimed for it, so the voice never reads it in the wrong language.
+    """
+    title = str(story.get("title", ""))
+    language = str(language).lower()
+    if language != "en":
+        for article in story.get("articles", []):
+            edition = " ".join(str(article.get("title") or "").split())
+            if edition and str(article.get("language", "")).lower() == language:
+                return edition, language
+    return title, None
+
+
+def spoken_text(segment: dict[str, Any], headline: str, language: str, headline_language: str | None = None) -> str:
     """What the voice reads for one story: any introduction, then the headline, then the figures.
 
-    The transcript shows each headline above its story, so only the audio adds it. Headlines come from
-    the source articles, which are mostly English, so they are announced only in English briefings.
+    The transcript shows each headline above its story, so only the audio adds it. English briefings announce
+    the story title as it is. Any other language announces a headline only when it is known to be in that
+    language (``headline_language``), because a source title in another language would be read out of place.
     """
     introduction, body = _split_introduction(str(segment.get("text", "")))
     headline = " ".join(str(headline or "").split())
-    if not headline or str(language).lower() != "en":
+    language = str(language).lower()
+    if not headline or (language != "en" and str(headline_language or "").lower() != language):
         return str(segment.get("text", ""))
     if headline[-1] not in ".?!":
         headline += "."

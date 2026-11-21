@@ -13,25 +13,46 @@ from .providers import voice_settings
 STORY_GAP_SECONDS = 0.9
 
 
-def offline_voice(text, path):
+OFFLINE_VOICE_LANGUAGES = ("en", "de", "nl")
+
+
+def offline_voice(text, path, language="en"):
+    """Speak ``text`` with an offline voice for ``language`` (en, de or nl).
+
+    eSpeak NG ships a voice for each of them. Windows System.Speech uses an installed voice of that language
+    and otherwise keeps its default voice. A missing eSpeak voice falls back to the English one rather than
+    leaving the briefing without audio.
+    """
+    language = str(language or "en").lower()
+    if language not in OFFLINE_VOICE_LANGUAGES:
+        language = "en"
     if binary := (shutil.which("espeak-ng") or shutil.which("espeak")):
-        command = [binary, "-v", "en", "-w", path.name, "--stdin"]
+        attempts = [[binary, "-v", voice, "-w", path.name, "--stdin"] for voice in dict.fromkeys((language, "en"))]
         env = None
         working_dir = path.parent
     elif os.name == "nt":
-        command = [
+        attempts = [[
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
             "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.Speech; "
             "$voice = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            "$match = $voice.GetInstalledVoices() | Where-Object { $_.Enabled -and "
+            "$_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq $env:BRIEFING_VOICE_LANGUAGE } | Select-Object -First 1; "
+            "if ($match) { $voice.SelectVoice($match.VoiceInfo.Name) }; "
             "$voice.SetOutputToWaveFile($env:BRIEFING_VOICE_OUTPUT); "
             "$voice.Speak([Console]::In.ReadToEnd()); $voice.Dispose()",
-        ]
-        env = {**os.environ, "BRIEFING_VOICE_OUTPUT": str(path)}
+        ]]
+        env = {**os.environ, "BRIEFING_VOICE_OUTPUT": str(path), "BRIEFING_VOICE_LANGUAGE": language}
         working_dir = None
     else:
         raise RuntimeError("Install eSpeak NG for offline narration")
-    subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True, timeout=speech_timeout(),
-                   cwd=working_dir)
+    for index, command in enumerate(attempts):
+        try:
+            subprocess.run(command, input=text, encoding="utf-8", env=env, capture_output=True, check=True,
+                           timeout=speech_timeout(), cwd=working_dir)
+            return
+        except subprocess.CalledProcessError:
+            if index == len(attempts) - 1:
+                raise
 
 
 def speech_timeout():
@@ -139,10 +160,15 @@ def create_audio(briefing, store, providers, mode):
     if not briefing["segments"]:
         raise ValueError("A briefing needs at least one audio segment")
     # The voice announces each story by its headline; the transcript already shows it as a heading.
+    # A German or Dutch briefing announces only a title that is in its own language.
     from .pipeline import spoken_text
-    headlines = {"segment-" + str(story.get("id")): story.get("title", "") for story in briefing.get("stories", [])}
-    segments = [dict(segment, text=spoken_text(segment, headlines.get(segment.get("id"), ""), language))
-                for segment in briefing["segments"]]
+    stories = {"segment-" + str(story.get("id")): story for story in briefing.get("stories", [])}
+    segments = []
+    for segment in briefing["segments"]:
+        story = stories.get(segment.get("id"), {})
+        segments.append(dict(segment, text=spoken_text(
+            segment, story.get("title", ""), language, story.get("title_language"),
+        )))
     clip_keys = [_audio_key(("segment-v1", mode, voice, language, segment)) for segment in segments]
     clips = [store.audio_dir / f"{key}.{extension}" for key in clip_keys]
     if len(clips) == 1:
@@ -165,8 +191,11 @@ def create_audio(briefing, store, providers, mode):
         def synthesize(output):
             if mode == "live":
                 providers.synthesize(segment["text"], output, language)
-            else:
+            elif language == "en":
                 offline_voice(segment["text"], output)
+            else:
+                # Other languages get a voice for their own language.
+                offline_voice(segment["text"], output, language)
 
         if _publish_audio(clip, synthesize) and mode == "demo":
             store.record_usage("speech_generation", mode=mode, characters=len(segment["text"]), estimated_usd=0)

@@ -85,9 +85,18 @@ Each import prepares a neutral summary and up to three evidence-backed angles pe
 
 Audio clips are synthesized on first use and reused across listeners. The app assembles clips in briefing order and reuses the complete audio file when another briefing has the same ordered clips. This saves synthesis work across requests. Disk usage still grows with the number of distinct audio sequences, and reuse across workers requires the same audio directory on a filesystem that supports file locking.
 
+## Languages
+
+Briefings can be listened to in English, German (Deutsch) and Dutch (Nederlands) in demo and live mode. The "Output language" menu lists them by their own names; the page itself stays in English. The choice applies to saved profiles, custom briefings and schedules alike. Set `BRIEFING_MULTILINGUAL=0` to offer English only; the setting is read on every request.
+
+- **Narration.** Labels, units, currency words and the introduction are written in the listener's language, with decimal commas ("3,25 Prozent"). Figures come from the verified facts of whichever edition states them, so every sentence still cites its sources. A figure whose scale or unit cannot be read faithfully is left out instead of guessed. Examples are German "Billionen" (a trillion), "Tausend", "Prozentpunkte" and Dutch "biljoen", "duizend", "keer".
+- **Headlines.** A German or Dutch briefing shows each story under the title of its edition in that language and the voice reads it before the figures. Where a story has no edition in that language, the original title stays as the heading and the voice reads no headline. English briefings are unchanged.
+- **Voices.** Live speech uses `eleven_multilingual_v2`, which speaks all three languages. Demo mode uses eSpeak NG's `de` and `nl` voices, or on Windows an installed System.Speech voice for that language. Without one it falls back to the English voice, so audio is always produced.
+- **Limits.** Only stories with a German or Dutch edition get a localized headline. The listening quality of the offline voices is basic. Judge the final sound with ElevenLabs.
+
 ## Live providers and costs
 
-Install `backend/requirements-live.txt` and make FFmpeg available on `PATH` to assemble multi-story MP3 briefings. Set `BRIEFING_MODE=live`, `ALLOW_EXTERNAL_PROVIDER_DATA=1`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and `ELEVENLABS_VOICE_ID` in the backend environment. Import before launching the server. Only use live event processing if the organizers permit those provider transfers, and pass `--allow-provider-processing` to the event import in that case. Start with English and set `BRIEFING_MULTILINGUAL=1` after validating English narration and German and Dutch outputs.
+Install `backend/requirements-live.txt` and make FFmpeg available on `PATH` to assemble multi-story MP3 briefings. Set `BRIEFING_MODE=live`, `ALLOW_EXTERNAL_PROVIDER_DATA=1`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, and `ELEVENLABS_VOICE_ID` in the backend environment. Import before launching the server. Only use live event processing if the organizers permit those provider transfers, and pass `--allow-provider-processing` to the event import in that case. German and Dutch are on by default; check a German and a Dutch briefing by ear before the demo (see Languages).
 
 The application records token usage for OpenAI and submitted text characters for ElevenLabs. Set the rates for your selected models and account to calculate USD estimates:
 

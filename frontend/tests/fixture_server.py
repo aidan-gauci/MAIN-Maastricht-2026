@@ -12,7 +12,7 @@ from backend.app import audio
 from backend.app.main import app
 
 
-def mock_voice(_text, path):
+def mock_voice(_text, path, _language="en"):
     with wave.open(str(path), "wb") as output:
         output.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
         output.writeframes(b"\0\0" * 8000)
