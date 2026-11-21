@@ -310,6 +310,14 @@ class Store:
             rows = db.execute("SELECT DISTINCT fact_id FROM fact_history WHERE listener_id=? AND spoken_at>=? AND spoken_at<=?", (listener_id, since, until)).fetchall()
         return [row["fact_id"] for row in rows]
 
+    def first_spoken_times(self, listener_id: str, fact_ids: Iterable[str]) -> dict[str, str]:
+        """When the listener first heard each fact. A fact recalled later keeps the time it was first heard as news,
+        so "the figure heard last time" is the one first heard most recently."""
+        wanted = set(fact_ids)
+        with self._connect() as db:
+            rows = db.execute("SELECT fact_id, MIN(spoken_at) AS first FROM fact_history WHERE listener_id=? GROUP BY fact_id", (listener_id,)).fetchall()
+        return {row["fact_id"]: row["first"] for row in rows if row["fact_id"] in wanted}
+
     def record_spoken_facts(self, listener_id: str, fact_ids: Iterable[str], briefing_id: str, spoken_at: str) -> None:
         with self._connect() as db:
             db.executemany("INSERT OR IGNORE INTO fact_history(listener_id,fact_id,spoken_at,briefing_id) VALUES(?,?,?,?)",

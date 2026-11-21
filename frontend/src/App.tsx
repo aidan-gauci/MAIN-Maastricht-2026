@@ -8,7 +8,7 @@ import logoForDark from './assets/brand/maze-logo-for-dark-mode.svg';
 type Profile = { id: string; name: string; description: string; topic_weights?: Record<string, number>; excluded_topics?: string[]; expertise?: string; language?: string; duration?: number; style?: string };
 type Source = { article_id: string; title: string; source: string; url: string };
 type Story = { id: string; title: string; reason: string; title_language?: string };
-type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
+type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean; refresher_fact_ids?: string[] };
 type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
 type VoicePreset = { id: string; label: string; description?: string; preview?: boolean; languages?: string[] | null };
 // Every voice speaks every output language; ElevenLabs has verified only some, and elsewhere the accent may vary.
