@@ -21,6 +21,7 @@ class VoiceCatalogueTest(unittest.TestCase):
                 demo = [row["id"] for row in config.configured_voice_presets()]
         self.assertEqual(live[0], "default")
         self.assertIn("daniel", live)
+        self.assertEqual(len(config.VOICE_CATALOGUE), 5)  # two male and three female voices
         self.assertEqual(len(live), 1 + len(config.VOICE_CATALOGUE))
         self.assertEqual(demo, ["default"])
 

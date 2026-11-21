@@ -162,15 +162,17 @@ REGIONS = COUNTRY_CODES | {"all", "Europe"}
 EUROPE_COUNTRIES = {"AD", "AL", "AT", "AX", "BA", "BE", "BG", "BY", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FO", "FR", "GB", "GG", "GI", "GR", "HR", "HU", "IE", "IM", "IS", "IT", "JE", "LI", "LT", "LU", "LV", "MC", "MD", "ME", "MK", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "RU", "SE", "SI", "SJ", "SK", "SM", "UA", "VA", "TR"}
 
 
-# ElevenLabs premade voices suited to reading news, chosen from this account's library. Premade voice
-# IDs are public and stable. They are offered only in live mode; demo mode uses the local system voice.
+# Two male and three female voices suited to reading news, from this account's ElevenLabs library. All
+# bill 1 credit per character on eleven_multilingual_v2 (premade voices, and a library voice at rate 1.0)
+# and can speak every language that model supports; ElevenLabs has verified Brian and Lily in both German
+# and Dutch, and Daniel, Matilda and Sarah in German. Offered only in live mode; demo mode uses the local
+# system voice.
 VOICE_CATALOGUE = (
     {"id": "daniel", "label": "Daniel", "description": "British, steady broadcaster", "voice_id": "onwK4e9ZLuTAKqWW03F9"},
+    {"id": "brian", "label": "Brian", "description": "American, deep and resonant", "voice_id": "nPczCjzI2devNBz1zQrb"},
     {"id": "lily", "label": "Lily", "description": "British, warm and clear", "voice_id": "pFZP5JQG7iQjIQuC4Bku"},
     {"id": "matilda", "label": "Matilda", "description": "American, knowledgeable and professional", "voice_id": "XrExE9yKIg1WjnnlVkGX"},
-    {"id": "eric", "label": "Eric", "description": "American, smooth and trustworthy", "voice_id": "cjVigY5qzO86Huf0OWal"},
-    {"id": "brian", "label": "Brian", "description": "American, deep and resonant", "voice_id": "nPczCjzI2devNBz1zQrb"},
-    {"id": "river", "label": "River", "description": "American, relaxed and neutral", "voice_id": "SAz9YHcvj6GT2YYXdXww"},
+    {"id": "sarah", "label": "Sarah", "description": "American, approachable and informative", "voice_id": "Nhs7eitvQWFTQBsf0yiT"},
 )
 
 
