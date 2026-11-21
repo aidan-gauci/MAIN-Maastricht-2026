@@ -260,6 +260,11 @@ _ADVICE_HEADLINE = re.compile("|".join((
     r"\bimplied\s+volatility\s+surging\b|\boptions\s+traders\s+betting\b|\bbargain\s+stocks?\b|\b(?:watchlist|momentum)\s+stocks?\b",
     r"\b(?:up|down)graded?\s+to\b|\broom\s+to\s+run\b|\bcan\s+the\s+run\s+continue\b|\bto\s+gain\s*\?",
     r"\bsignals?\s*:|\b(?:trading|forex)\s+signals?\b|\bprice\s+(?:prediction|forecast|analysis|targets?)\b|\b(?:golden|death)\s+cross\b",
+    # Price outlooks and trader sentiment: a question whether a price will crash or recover, "... what's next?",
+    # "... as bears keep control".
+    r"\b(?:could|will|can)\s+(?:[\w$'’.-]+\s+){0,3}?(?:crash|soar|plunge|skyrocket|rebound|recover|rally)\b[^?]*\?",
+    r"\b(?:prices?|stocks?|shares?|gold|silver|oil|crude|bitcoin|btc|ether|xrp|crypto\w*|dollar|euro|yen|index)\b.*\bwhat['’]?s\s+next\b",
+    r"\b(?:bulls?|bears?)\b.*\bcontrol\b",
     r"\bdon['’]?t\s+overlook\b|\bthese\s+\d+\s|\bthese\s+(?:etfs?|stocks?|funds?)\b|\bbuying\s+opportunity\b|\b(?:buy|sell|hold)['’\"”]?\s+rating\b|\bfor\s+(?:\w+\s+)?investors\s*\?",
     r"\b(?:aktien|aandelen)\s+(?:zum\s+kaufen|om\s+te\s+kopen)\b|\bkaufempfehlung\b|\bkoopadvies\b",
 )), re.I)
@@ -1671,6 +1676,10 @@ def _spoken_amount(fact: dict[str, Any], figure: _Figure, source_language: str, 
 
 # A story is read as a few claims, not every number in it.
 _MAX_SPOKEN_CLAIMS = 4
+# How deep a story goes depends on the listener: a beginner hears its three leading figures, an advanced
+# listener up to seven. The figures are ranked in one fixed order, so the figures of a shallower version
+# are always among those of a deeper one.
+_SPOKEN_CLAIMS = {"beginner": 3, "intermediate": 5, "advanced": 7}
 # Figures read out without a measure name, only for a story in which no figure can be named.
 _UNNAMED_FIGURE_LIMIT = 3
 _UNNAMED_FIGURE = {"en": "The report gives {}.", "de": "Der Bericht nennt {}.", "nl": "Het bericht noemt {}."}
@@ -1805,7 +1814,8 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
             group["first"] = min(group["first"], n)
         # A figure whose evidence names no measure is not spoken under an invented label. Only when nothing
         # in the story can be named are the figures read out, with their units, as plain reports.
-        candidates, limit = [g for g in groups.values() if g["figure"].label], _MAX_SPOKEN_CLAIMS
+        candidates = [g for g in groups.values() if g["figure"].label]
+        limit = _SPOKEN_CLAIMS.get(expertise, _MAX_SPOKEN_CLAIMS)
         unnamed_only = not candidates
         if not candidates:
             # A bare duration or age ("10 years") says nothing without its measure, so it is never read out.
@@ -1818,8 +1828,8 @@ def narrate(ranked: list[dict[str, Any]], profile: dict[str, Any], providers: An
             conflicting = any(member.get("conflict_status") == "conflict" for member in group["members"])
             return (0 if conflicting else 1 if group["figure"].label and group["figure"].unit else 2, group["first"])
 
-        # Conflicting values, then named figures with a unit. The choice depends only on the facts, so every
-        # language, expertise and angle of a prepared summary cites the same ones, in source order. A name is
+        # Conflicting values, then named figures with a unit. The choice depends only on the facts and the
+        # listener's level, so every angle of a prepared summary cites the same ones, in source order. A name is
         # heard at most twice per story (a value and its update, or two periods): a third "Rate change, ..."
         # tells a listener nothing about what differs. Conflicting values always keep their name, because
         # the conflict is the news.

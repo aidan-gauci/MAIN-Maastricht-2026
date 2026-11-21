@@ -2,7 +2,7 @@
 
 **Find your way through the news.** Maze turns prepared business news into short, personalized audio briefings. Every spoken figure is traced to its source. Choose a listener, generate a briefing, and open any transcript segment, or the Traces view, to follow each claim back to the reporting. The evidence and cost views support the hackathon demo.
 
-Configuration and storage use neutral, descriptive names rather than the product name: `BRIEFING_*` environment variables, the `.briefing-data` folder, `briefing-*` browser storage keys, the `X-Scheduler-Secret` header and `briefing-*` n8n workflows. A rename of the product does not touch deployments or saved settings.
+Configuration and storage use neutral, descriptive names rather than the product name: `BRIEFING_*` environment variables, the `.briefing-data` folder, `briefing-*` browser storage keys, and the `X-Scheduler-Secret` header. A rename of the product does not touch deployments or saved settings.
 
 ## Run locally
 
@@ -74,7 +74,7 @@ $env:BRIEFING_CORPUS = "event"
 
 Use `--limit 20` for a sample and `--official PATH` to append public releases in the normalized JSONL format. See `backend/demo/articles.jsonl` for that format. Event preparation without providers is a heuristic baseline. Review its clusters and evidence before using it in a live demo. No organizer answer key was provided, so grouping quality is judged by reading the clusters and spot-checking facts against their source articles.
 
-Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load your own profile cards in place of the four built-in ones (everyday economics, markets professional, policy watcher, and a German everyday listener). Choosing a profile sets the output language to the profile's own. The wildcard uses topic chips, three expertise levels, a length of 3, 5, or 8 stories (about 1, 2, or 3 minutes of audio), and the supported output languages. On a large corpus the chips are the subject areas that several speakable stories report on, then the most common tagged subjects, 36 at most.
+Set `BRIEFING_PROFILES` to an untracked JSON file matching `backend/demo/profiles.json`, for example `profiles.local.json`, to load your own profile cards in place of the four built-in ones (everyday economics, markets professional, policy watcher, and a German everyday listener). Choosing a profile sets the output language to the profile's own. The wildcard uses topic chips (shown capitalised), three expertise levels, a length of 3, 5, 8, 12, or 16 stories (roughly 1 to 2, 2 to 3, 3 to 5, 5 to 7, and 7 to 9 minutes of audio, depending on the level), and the supported output languages. On a large corpus the chips are the subject areas that several speakable stories report on, then the most common tagged subjects, 36 at most.
 
 ### Labels in the listeners' other languages
 
@@ -108,7 +108,8 @@ Nothing is spoken that cannot be traced, and nothing is spoken that recommends a
 
 - **Extraction.** Live import sends one article per request to the small model and asks for figures with the verbatim sentence they come from and a short name for what each measures. A figure is kept only if its evidence is found in the article, the value and unit are printed in that evidence, and the name is built from the article's own words.
 - **Narration.** A briefing is assembled from those facts as "Name, amount." sentences. No model writes or rearranges a listener's briefing, so a figure cannot be attached to a different claim. Sources that give different values for one measure are both read and labelled as conflicting.
-- **No investment advice.** Stock picks, fund and ETF recommendations, an investment publisher's round-ups of its own picks, "should you buy" pieces, upgrades and downgrades, trading signals and price predictions are recognised by their headline and never selected. Inside a news report, a rating, a rank, a price target or a chart level (support, resistance) is never read out. The gate is deliberately wide: withholding a news story costs one story, reading out a recommendation costs trust. Every briefing opens by saying that the voice is synthetic and that it is not investment advice.
+- **Depth.** A story reads its headline and up to 3 named figures for a beginner, 5 for an intermediate listener and 7 for an advanced one. The figures are ranked in one fixed order, so those of a shallower level are always among those of a deeper one, and each language and level keeps its own citations. A story in which no figure can be named still reads at most three plain figures.
+- **No investment advice.** Stock picks, fund and ETF recommendations, an investment publisher's round-ups of its own picks, "should you buy" pieces, upgrades and downgrades, trading signals, price predictions, price outlooks ("could the price crash ...?", "what's next?" on a price story) and trader-sentiment pieces ("bulls" or "bears" in "control") are recognised by their headline and never selected. Inside a news report, a rating, a rank, a price target or a chart level (support, resistance) is never read out. The gate is deliberately wide: withholding a news story costs one story, reading out a recommendation costs trust. Every briefing opens by saying that the voice is synthetic and that it is not investment advice.
 - **`audit-claims PATH`** re-reads the original feeds and checks every stored fact (evidence verbatim in its article, figure printed in the evidence, name in the article's words, source linked), every translated label, and every prepared narration (each spoken number is the value of a cited fact). It makes no provider call.
 
 ```powershell
@@ -116,15 +117,19 @@ $env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"
 ./.venv/Scripts/python.exe -m backend.app audit-claims "C:/path/event-data.zip"
 ```
 
-On the full event corpus (1,740 articles, 1,361 stories): 10,163 of 10,163 figures are verbatim in their article with the figure printed in the evidence; 6,382 of 6,382 measure names use the article's words; 1,261 translated headlines and 7,730 translated measure names pass their checks; 17,802 of 17,802 prepared narrations speak only cited figures; 635 stories are withheld as investment advice (the corpus is heavy with one investment publisher's stock-pick content).
+On the full event corpus (1,740 articles, 1,361 stories): 10,163 of 10,163 figures are verbatim in their article with the figure printed in the evidence; 6,382 of 6,382 measure names use the article's words; 1,261 translated headlines and 7,730 translated measure names pass their checks; 17,226 of 17,226 prepared narrations speak only cited figures; 655 stories are withheld as investment advice (the corpus is heavy with one investment publisher's stock-pick content); 637 stories can be spoken in each of the three languages.
 
 ## Shared recommendations and summaries
 
-The listener's topic weights form an interest vector. The app ranks eligible stories against that vector, applies topic exclusions, and uses the same weights to choose a prepared angle for each selected story. Language and expertise select a version of that angle. A story about any one of a listener's interests ranks ahead of unrelated headline news, however many interests they named; recency, coverage by several outlets and belonging to a developing event order the rest. A listener's next briefing starts with stories they have not heard.
+The listener's topic weights form an interest vector. The app ranks eligible stories against that vector, applies topic exclusions, and uses the same weights to choose a prepared angle for each selected story. Language and expertise select a version of that angle. A story about any one of a listener's interests ranks ahead of unrelated headline news, however many interests they named; recency, coverage by several outlets and belonging to a developing event order the rest.
 
-Each import prepares a neutral summary and up to three evidence-backed angles per eligible story. Summary text is prepared locally, with the same fact IDs, sources, and conflict labels across angles. Briefing requests select and assemble the prepared segments. Older databases can still serve briefings. Reimport the corpus to store the shared summaries so workers can load them directly after a restart.
+**Memory.** Each browser keeps a listener ID in its local storage. The facts that listener heard are stored on the server for seven days, so they carry over from one session to the next: the next briefing starts with stories they have not heard, and a heard figure is never read again as news. A private window, or cleared site data, is a new listener.
 
-Audio clips are synthesized on first use and reused across listeners. The app assembles clips in briefing order and reuses the complete audio file when another briefing has the same ordered clips. This saves synthesis work across requests. Disk usage still grows with the number of distinct audio sequences, and reuse across workers requires the same audio directory on a filesystem that supports file locking.
+**Ratings.** In the Listen view, *Sources used* and *Review this briefing* are collapsed until opened. Under the review, each story can be marked helpful or not useful. Each rated story shifts that listener's weight for the story's topics by 0.1, up or down, for their future briefings; only the latest rating of a story counts.
+
+Each import prepares a neutral summary and up to three evidence-backed angles per eligible story, at each of the three levels. Summary text is prepared locally, with the same fact IDs, sources, and conflict labels across the angles of a level. Briefing requests select and assemble the prepared segments. Older databases can still serve briefings. Reimport the corpus to store the shared summaries so workers can load them directly after a restart.
+
+Audio clips are synthesized on first use and reused across listeners. A clip is kept on disk under a key made from its text, language and voice, so a clip anyone has rendered once plays at once for everyone after, and a new story, level or voice takes about 15 seconds the first time. The app assembles clips in briefing order and reuses the complete audio file when another briefing has the same ordered clips. This saves synthesis work across requests. Disk usage still grows with the number of distinct audio sequences, and reuse across workers requires the same audio directory on a filesystem that supports file locking.
 
 ## Languages
 
@@ -132,7 +137,7 @@ Briefings can be listened to in English, German (Deutsch) and Dutch (Nederlands)
 
 - **Narration.** Labels, units, currency words and the introduction are written in the listener's language, with decimal commas ("3,25 Prozent"). Figures come from the verified facts of whichever edition states them, so every sentence still cites its sources. A figure whose scale or unit cannot be read faithfully is left out instead of guessed. Examples are German "Billionen" (a trillion), "Tausend", "Prozentpunkte" and Dutch "biljoen", "duizend", "keer".
 - **Headlines.** A German or Dutch briefing shows each story under the title of its edition in that language and the voice reads it before the figures. Where a story has no edition in that language, a live corpus uses the checked translation of the headline (see *Labels in the listeners' other languages*) and marks it as translated. Without either, the original title stays as the heading and the voice reads no headline.
-- **Measure names.** A name the extraction model gave a figure is spoken in its article's language, and in another language through its checked translation. On the event corpus this took German and Dutch from 620 of 1,049 stories read as unnamed figures to 42 of 657.
+- **Measure names.** A name the extraction model gave a figure is spoken in its article's language, and in another language through its checked translation. On the event corpus this took German and Dutch from 620 of 1,049 stories read as unnamed figures to 41 (German) and 42 (Dutch) of 637.
 - **Voices.** Live speech uses `eleven_multilingual_v2`, which speaks all three languages. Demo mode uses eSpeak NG's `de` and `nl` voices, or on Windows an installed System.Speech voice for that language. Without one it falls back to the English voice, so audio is always produced.
 - **Limits.** Translated labels are machine translations of short phrases; they are checked for numbers, not for style. The fixture (demo mode) has no translations, so there only stories with a German or Dutch edition get a localized headline. The listening quality of the offline voices is basic. Judge the final sound with ElevenLabs.
 
@@ -190,11 +195,11 @@ That is about $0.00056 per article. A weekday of 172 to 190 articles costs about
 
 | Daily listeners | Typical choices | Choices spread evenly (worst case) | Clips reused | If nothing were shared |
 |---|---|---|---|---|
-| 100 | $1.93 | $2.52 | 55% | $4.09 |
-| 1,000 | $0.59 | $0.76 | 86% | $3.97 |
-| 10,000 | $0.11 | $0.12 | 97.5% | $3.92 |
+| 100 | $2.29 | $2.91 | 52% | $4.46 |
+| 1,000 | $0.85 | $1.05 | 82% | $4.38 |
+| 10,000 | $0.20 | $0.24 | 96% | $4.33 |
 
-"Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 688,044 spoken facts were replayed to a listener who had already heard them, and 0 were spoken without their source. The month is extrapolated from the 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives $0.14 at 10,000 listeners.
+"Typical" is 70% English, half on the default voice, 70% on a saved profile. In the same run, 0 of 779,182 spoken facts were replayed to a listener who had already heard them, and 0 were spoken without their source. The month is extrapolated from the 3 simulated days on a fixed corpus, in which later days cost less than the first; pricing every day at the first day's rate gives $0.26 at 10,000 listeners.
 
 ```powershell
 $env:BRIEFING_MODE = "live"; $env:BRIEFING_CORPUS = "event"
@@ -214,19 +219,19 @@ The cost per listener falls as the audience grows, because each story version is
 
 ## Scheduled delivery
 
-The schedule form is hidden by default because the n8n workflows are inactive and no production service is configured. To show it for development, build the frontend with `VITE_SHOW_SCHEDULE=1` (for example `$env:VITE_SHOW_SCHEDULE = "1"; npm run build`). The API and the local demo timer are unaffected.
+The schedule form is shown by default, under *Schedule delivery*. To hide it, build the frontend with `VITE_SHOW_SCHEDULE=0` (for example `$env:VITE_SHOW_SCHEDULE = "0"; npm run build`). The server keeps each schedule itself with a timer, in demo and in live mode, and reports the scheduler status as "local". A schedule runs only while the server process runs; saved schedules are armed again when it starts.
 
-Listener settings save one daily or weekly delivery time in the browser's selected IANA timezone. Each browser stores its own listener ID. Scheduled briefings appear at the delivery time with their cited sources. Story ratings and recent spoken facts are stored separately for each listener. The output language and article region are independent. To enable region filters for an imported corpus, supply explicit `region` or `country` metadata and reimport existing records as needed.
+Listener settings save one daily or weekly delivery time in the browser's selected IANA timezone. A schedule delivers either a saved profile or a custom selection of topics, depth and length, chosen in the schedule form. Each browser stores its own listener ID. Scheduled briefings appear at the delivery time with their cited sources. Story ratings and recent spoken facts are stored separately for each listener. The output language and article region are independent. To enable region filters for an imported corpus, supply explicit `region` or `country` metadata and reimport existing records as needed.
 
-Demo mode uses a local timer when n8n is unconfigured. Keep the backend running during generation and delivery. The first eligible occurrence is one with a full 30-minute generation window. During daylight saving changes, a missing local time shifts to the first valid minute, and a repeated local time uses its first occurrence.
+Keep the backend running during generation and delivery. Generation starts 30 minutes before delivery, and the first eligible occurrence is one with a full generation window, so the first delivery is at least 30 minutes away. Set `BRIEFING_SCHEDULE_LEAD_MINUTES` (1 to 120) to change that lead; with `1`, a delivery set two minutes ahead arrives in a demo. In live mode a scheduled briefing renders any clips it needs with the live voice at generation time. During daylight saving changes, a missing local time shifts to the first valid minute, and a repeated local time uses its first occurrence.
 
-The prototype ranker supports scheduled relevance, explicit regions, and seven-day fact suppression in this checkout. Apply the separate recommendation patch to enable the full feedback-aware ranking interface. See the [n8n Cloud setup](automation/SETUP.md) for the workflow exports, credential setup, and deployment checks. Activation requires a public HTTPS backend and durable storage for both SQLite and audio files.
+Scheduled briefings use the same ranking, regions, feedback and seven-day fact memory as briefings made on request. An external scheduler was planned and dropped for this prototype: it would need a public HTTPS backend and durable storage for SQLite and audio. The endpoints it would call (`X-Scheduler-Secret`) are still in the API and unused.
 
 ## Demo and cleanup
 
 Generate two distinct profiles, audit three spoken claims against their source articles in the Traces view, generate a wildcard live, and open the evidence and cost views. For the presentation, show the full corpus measurement and 10x estimate. Pitch a newsroom publisher as the buyer and show how editorial review fits between batch preparation and audio delivery. [docs/judging-evidence.md](docs/judging-evidence.md) lists the measured numbers against each judging criterion.
 
-Play each profile's briefing once before presenting: its clips are then cached, so it opens at once and costs nothing more. A wildcard in a new language or voice takes about fifteen seconds the first time, while its clips are rendered.
+Play each profile's briefing once before presenting: its clips are then cached, so it opens at once and costs nothing more. A wildcard with a new story, level, language or voice takes about fifteen seconds the first time, while its clips are rendered; after that it is instant for everyone.
 
 Run the fixture checks with `./.venv/Scripts/python.exe -m unittest discover -s backend/tests`. The fictional fixture's expected clusters and values live in `backend/demo/answer-key.json` and are checked by the test suite.
 

@@ -274,7 +274,7 @@ main { max-width: 1110px; margin: 0 auto; padding: 36px 28px 0; }
 select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .profile-description { margin: 12px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-2); max-width: 46ch; }
 .microcopy { font-size: 13px; line-height: 1.45; color: var(--text-2); margin: 8px 0 0; }
-.settings-row { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 12px 0; margin-top: 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.settings-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; padding: 12px 0 0; margin-top: 14px; margin-bottom: -8px; border-top: 1px solid var(--line); }
 .settings-row span { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
 .settings-row svg { color: var(--accent); flex: none; }
 
@@ -286,7 +286,7 @@ select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .topic-pill {
   display: flex; align-items: center; gap: 5px; min-height: 36px; padding: 6px 12px;
   border: 1px solid var(--line-control); border-radius: 999px; background: var(--surface);
-  color: var(--text); font-size: 13px; cursor: pointer;
+  color: var(--text); font-size: 13px; cursor: pointer; text-transform: capitalize;
 }
 .topic-pill:hover:not(:disabled) { background: var(--tint); }
 .topic-pill.chosen { border-color: var(--accent); background: var(--tint); color: var(--accent); font-weight: 600; }
@@ -310,6 +310,10 @@ select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .schedule-settings summary span { display: flex; align-items: center; gap: 7px; }
 .schedule-settings[open] summary > svg { transform: rotate(180deg); }
 .schedule-fields { display: grid; gap: 12px; padding: 0 12px 14px; }
+/* A custom selection inside the schedule form: the same controls as the generation form. */
+.schedule-topics { display: grid; gap: 6px; }
+.schedule-topics > span { font-size: 14px; font-weight: 600; color: var(--ink); }
+.schedule-topics .topic-pills { margin-bottom: 0; }
 .schedule-note, .schedule-message, .next-delivery { font-size: 12.5px; line-height: 1.45; color: var(--text-2); }
 .schedule-message { color: var(--accent); }
 .schedule-failed { color: var(--danger-text); font-weight: 600; }
@@ -408,7 +412,7 @@ select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .voice-field { display: grid; gap: 8px; }
 .voice-field > label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; color: var(--ink); }
 .voice-sample {
-  justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 12px;
+  justify-self: center; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 12px;
   border: 1px solid var(--line-control); border-radius: 999px; background: transparent; color: var(--accent);
   font-size: 13px; font-weight: 600; cursor: pointer;
 }
@@ -423,8 +427,22 @@ select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .speed-option.active { background: var(--cta); border-color: var(--cta); color: var(--on-cta); }
 
 .block-title { font: 600 15px / 1.3 var(--sans); color: var(--ink); }
-.briefing-sources { display: grid; gap: 10px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
-.briefing-sources > div:first-child p { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+/* Folded by default: the briefing's sources, and the listener's review of it. */
+.briefing-fold { margin-top: 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--sunken); }
+.briefing-fold.briefing-sources { margin-top: 20px; }
+.briefing-fold summary {
+  min-height: 44px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  list-style: none; cursor: pointer; color: var(--ink); font-size: 14px; font-weight: 600;
+}
+.briefing-fold summary::-webkit-details-marker { display: none; }
+.briefing-fold summary span { display: flex; align-items: center; gap: 7px; }
+.briefing-fold summary em { font-style: normal; font-weight: 500; color: var(--text-2); }
+.briefing-fold summary svg { color: var(--accent); flex: none; }
+.briefing-fold[open] summary > svg:last-child { transform: rotate(180deg); }
+.briefing-fold-body { display: grid; gap: 10px; padding: 2px 12px 14px; }
+.fold-note { max-width: 64ch; font-size: 13px; line-height: 1.5; color: var(--text-2); }
+.briefing-review .story-feedback { margin-top: 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.briefing-review .story-feedback > span { flex: 1 1 220px; font-size: 14px; line-height: 1.4; color: var(--ink); margin-right: 8px; }
 .briefing-source-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
 .no-sources { font-size: 13px; color: var(--text-2); }
 

@@ -30,7 +30,7 @@ def _story_summary(story):
         key=lambda topic: (-_mentions_topic(topic, story["title"]), -coverage[topic], topic),
     )[:_MAX_ANGLES]
     variants = {angle: {} for angle in [_NEUTRAL, *angles]}
-    segments = {}
+    segments, citations = {}, {}
     for language in _LANGUAGES:
         rendered = {}
         for angle in variants:
@@ -49,12 +49,17 @@ def _story_summary(story):
             continue
         for (angle, expertise), segment in rendered.items():
             variants[angle][language + "/" + expertise] = segment["text"]
-        segments[language] = {key: value for key, value in next(iter(rendered.values())).items() if key != "text"}
+            # A deeper level speaks more figures, so each level of a language keeps its own citations. An
+            # angle only reorders the figures of its level.
+            citations.setdefault(language + "/" + expertise, {key: value for key, value in segment.items() if key != "text"})
+        default = language + "/intermediate"
+        segments[language] = citations.get(default) or next(value for key, value in citations.items() if key.startswith(language + "/"))
     if not segments:
         return None
-    # "segment" is the citation set of the first language that can speak the story, kept for readers of
-    # older corpora; "segments" holds each language's own.
-    return {"segment": next(iter(segments.values())), "segments": segments, "variants": variants}
+    # "citations" holds the facts and sources of every language and level. "segments" (per language, at the
+    # middle level) and "segment" (the first language that can speak the story) are kept for readers of
+    # older corpora.
+    return {"segment": next(iter(segments.values())), "segments": segments, "citations": citations, "variants": variants}
 
 
 def prepare_summaries(stories):
@@ -93,7 +98,8 @@ def select_summaries(ranked, profile, summaries):
         text = variants[angle].get(version)
         if not text:
             continue    # nothing in this story can be said in the listener's language
-        citations = summary.get("segments", {}).get(profile["language"]) or summary["segment"]
+        citations = (summary.get("citations", {}).get(version) or summary.get("segments", {}).get(profile["language"])
+                     or summary["segment"])
         entries.append(({**deepcopy(citations), "text": text}, reads_plain_figures(text)))
         if sum(not plain for _, plain in entries) >= duration:
             break

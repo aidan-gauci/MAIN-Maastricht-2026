@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import pipeline
 from .audio import audio_file
-from .config import (CORPUS, DEMO, MODE, REGIONS, ROOT, BriefingRequest, ScheduleRequest,
+from .config import (CORPUS, DEMO, MODE, REGIONS, ROOT, BriefingRequest, ScheduleRequest, Wildcard,
                      configured_voice_presets, load_profiles, resolve_voice_id, supported_languages,
                      verified_languages)
 from .importer import read_articles
@@ -85,7 +85,30 @@ def _public_schedule(schedule: dict | None) -> dict | None:
         return None
     keys = ("schedule_id", "schedule_version", "profile_id", "region", "language", "cadence",
             "local_time", "weekday", "timezone", "voice_preset", "generation_at", "delivery_at", "dispatch_status")
-    return {key: schedule[key] for key in keys}
+    # A schedule for the listener's own selection has an empty profile_id and carries the selection.
+    return {**{key: schedule[key] for key in keys}, "wildcard": _schedule_wildcard(schedule)}
+
+
+def _schedule_wildcard(schedule: dict) -> dict | None:
+    stored = schedule.get("wildcard")
+    if not stored:
+        return None
+    try:
+        value = json.loads(stored)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _schedule_profile(schedule: dict) -> dict:
+    """The listener profile a schedule delivers: its own selection, or the saved profile, in the schedule's language."""
+    selection = _schedule_wildcard(schedule)
+    if selection is None:
+        return _configured_profile(schedule["profile_id"], schedule["language"])
+    profile = wildcard_profile(Wildcard(**{**selection, "language": schedule["language"]}))
+    if profile["language"] not in supported_languages():
+        raise HTTPException(422, "This output language has not been enabled")
+    return profile
 
 
 def _visible_briefing(briefing: dict, now=None) -> bool:
@@ -143,15 +166,14 @@ def _schedule_dispatch(schedule: dict) -> None:
         if status == "dispatch_failed" and MODE == "demo":
             _arm_local_schedule(schedule)
         return
-    if MODE == "demo":
-        store.update_dispatch_status(schedule["schedule_id"], schedule["schedule_version"], "local")
-        _arm_local_schedule(schedule)
-    else:
-        store.update_dispatch_status(schedule["schedule_id"], schedule["schedule_version"], "not_configured")
+    # Without n8n the server keeps the schedule itself, in demo and in live mode: a timer per schedule,
+    # for as long as this process runs.
+    store.update_dispatch_status(schedule["schedule_id"], schedule["schedule_version"], "local")
+    _arm_local_schedule(schedule)
 
 
 def _arm_local_schedule(schedule: dict) -> None:
-    """Use a one-shot timer in demo mode; production schedules use n8n Wait nodes."""
+    """Use a one-shot timer on this server when n8n is not configured; production schedules use n8n Wait nodes."""
     envelope = schedule_envelope(schedule)
     with timers_lock:
         current = store.schedule_for_id(schedule["schedule_id"])
@@ -212,7 +234,7 @@ def _execute_scheduled_run(envelope: dict) -> dict:
     if claim["status"] == "duplicate_day":
         return _finish_or_fail(envelope, status="skipped", claim_token=claim.get("claim_token"))
     try:
-        profile = _configured_profile(schedule["profile_id"], schedule["language"])
+        profile = _schedule_profile(schedule)
         listener_id = schedule["listener_id"]
         now = utc_now()
         spoken = store.spoken_fact_ids(listener_id, iso_utc(now - timedelta(days=7)), iso_utc(now))
@@ -277,7 +299,7 @@ async def lifespan(app):
             "No prepared news for BRIEFING_MODE=%s BRIEFING_CORPUS=%s; run `python -m backend.app import` first", MODE, CORPUS,
         )
     recommendation_topics(store)
-    if MODE == "demo" and not os.getenv("BRIEFING_N8N_WEBHOOK_URL"):
+    if not os.getenv("BRIEFING_N8N_WEBHOOK_URL"):
         for schedule in store.all_schedules():
             _arm_local_schedule(schedule)
     try:
@@ -415,11 +437,18 @@ def get_schedule(listener_id: UUID):
 def put_schedule(listener_id: UUID, request: ScheduleRequest):
     if request.language not in supported_languages():
         raise HTTPException(422, "This output language has not been enabled")
-    _configured_profile(request.profile_id, request.language)
+    if request.wildcard:
+        if not set(request.wildcard.topics).issubset(topics()):
+            raise HTTPException(422, "Choose topics from the prepared news")
+    else:
+        _configured_profile(request.profile_id, request.language)
     voice_ids = {row["id"] for row in configured_voice_presets()}
     if request.voice_preset not in voice_ids:
         raise HTTPException(422, "Choose a configured voice preset")
     config = request.model_dump()
+    # The schedule's language is the one spoken; the selection is stored with it so the two cannot differ.
+    config["wildcard"] = json.dumps({**config["wildcard"], "language": request.language}) if config["wildcard"] else None
+    config["profile_id"] = config["profile_id"] or ""
     times = next_occurrence(config)
     saved = store.save_schedule(_listener(listener_id), {**config, **times, "schedule_id": uuid4().hex})
     _schedule_dispatch(saved)

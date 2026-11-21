@@ -39,8 +39,20 @@ def iso_utc(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def schedule_lead() -> timedelta:
+    """How long before delivery a scheduled briefing is generated: 30 minutes, or BRIEFING_SCHEDULE_LEAD_MINUTES.
+
+    A short lead (1 to 5 minutes) lets a demo show a delivery arriving; production keeps the default.
+    """
+    try:
+        minutes = int(os.getenv("BRIEFING_SCHEDULE_LEAD_MINUTES", "30"))
+    except ValueError:
+        minutes = 30
+    return timedelta(minutes=min(120, max(1, minutes)))
+
+
 def next_occurrence(schedule: dict, after: datetime | None = None) -> dict[str, str]:
-    """Return the next delivery whose 30-minute generation window is still ahead."""
+    """Return the next delivery whose generation window (see schedule_lead) is still ahead."""
     zone = ZoneInfo(schedule["timezone"])
     now = (after or utc_now()).astimezone(UTC)
     local_now = now.astimezone(zone)
@@ -57,8 +69,9 @@ def next_occurrence(schedule: dict, after: datetime | None = None) -> dict[str, 
             naive += timedelta(minutes=1)
             candidate = naive.replace(tzinfo=zone)
         delivery = candidate.astimezone(UTC)
-        if delivery - timedelta(minutes=30) > now:
-            return {"generation_at": iso_utc(delivery - timedelta(minutes=30)), "delivery_at": iso_utc(delivery)}
+        lead = schedule_lead()
+        if delivery - lead > now:
+            return {"generation_at": iso_utc(delivery - lead), "delivery_at": iso_utc(delivery)}
         day += timedelta(days=1)
     raise ValueError("Could not find a future schedule occurrence")
 

@@ -19,7 +19,8 @@ const voiceOptionLabel = (preset: VoicePreset, code: string) => {
   const details = [preset.description, voiceVerifiedFor(preset, code) ? '' : `accent may vary in ${englishLanguageName(code)}`].filter(Boolean).join('; ');
   return details ? `${preset.label} (${details})` : preset.label;
 };
-type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
+type ScheduleSelection = { topics: string[]; expertise: string; duration: number; language: string };
+type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; wildcard: ScheduleSelection | null; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
 type ScheduleDraft = Omit<Schedule, 'schedule_id' | 'schedule_version' | 'generation_at' | 'delivery_at' | 'dispatch_status'>;
 type Fact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string };
 // thread_id and thread_title are present only on stories that belong to an event thread of two or more stories.
@@ -80,10 +81,11 @@ const applySpeed = (element: HTMLAudioElement | null, speed: number) => {
   element.playbackRate = speed;
 };
 // Scheduled delivery needs the n8n workflows, a public HTTPS backend and durable storage; hide it unless explicitly enabled.
-const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE === '1';
+const SHOW_SCHEDULE = import.meta.env.VITE_SHOW_SCHEDULE !== '0';
 const defaultTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-const defaultScheduleDraft = (): ScheduleDraft => ({ profile_id: '', region: 'all', language: 'en', cadence: 'daily', local_time: '08:00', weekday: 0, timezone: defaultTimezone(), voice_preset: 'default' });
-const toScheduleDraft = (schedule: Schedule): ScheduleDraft => ({ profile_id: schedule.profile_id, region: schedule.region, language: schedule.language, cadence: schedule.cadence, local_time: schedule.local_time, weekday: schedule.weekday, timezone: schedule.timezone, voice_preset: schedule.voice_preset });
+const CUSTOM_SCHEDULE = '__custom';
+const defaultScheduleDraft = (): ScheduleDraft => ({ profile_id: '', wildcard: null, region: 'all', language: 'en', cadence: 'daily', local_time: '08:00', weekday: 0, timezone: defaultTimezone(), voice_preset: 'default' });
+const toScheduleDraft = (schedule: Schedule): ScheduleDraft => ({ profile_id: schedule.profile_id, wildcard: schedule.wildcard ?? null, region: schedule.region, language: schedule.language, cadence: schedule.cadence, local_time: schedule.local_time, weekday: schedule.weekday, timezone: schedule.timezone, voice_preset: schedule.voice_preset });
 const regionLabel = (region: string) => {
   if (region === 'all') return 'All regions';
   if (region === 'Europe') return 'Europe';
@@ -347,7 +349,8 @@ export default function App() {
       const saved = await api<{ schedule: Schedule }>(`/listeners/${listenerId}/schedule`, {
         method: 'PUT',
         body: JSON.stringify({
-          profile_id: scheduleDraft.profile_id,
+          // A schedule delivers a saved profile or the listener's own selection, in the schedule's language.
+          ...(scheduleDraft.wildcard ? { wildcard: { ...scheduleDraft.wildcard, language: scheduleDraft.language } } : { profile_id: scheduleDraft.profile_id }),
           region: scheduleDraft.region,
           language: scheduleDraft.language,
           cadence: scheduleDraft.cadence,
@@ -437,7 +440,7 @@ export default function App() {
                 <div className="settings-row">
                   {activeProfile.duration && <span><Clock3 size={15}/>{activeProfile.duration} stories</span>}
                   {(language || activeProfile.language) && <span><AudioLines size={15}/>{languageLabel(language || activeProfile.language || 'en')}</span>}
-                  {activeProfile.expertise && <span><Gauge size={15}/>{activeProfile.expertise}</span>}
+                  {activeProfile.expertise && <span><Gauge size={15}/>{activeProfile.expertise.charAt(0).toUpperCase() + activeProfile.expertise.slice(1)}</span>}
                 </div>
               </>}
             </div> :
@@ -461,7 +464,7 @@ export default function App() {
               </fieldset>
               <div className="inline-fields">
                 <label>Depth<select value={expertise} onChange={event => setExpertise(event.target.value)}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
-                <label>Length<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={3}>3 stories, about 1 minute</option><option value={5}>5 stories, about 2 minutes</option><option value={8}>8 stories, about 3 minutes</option></select></label>
+                <label>Length<select value={duration} onChange={event => setDuration(Number(event.target.value))}><option value={3}>3 stories, 1 to 2 minutes</option><option value={5}>5 stories, 2 to 3 minutes</option><option value={8}>8 stories, 3 to 5 minutes</option><option value={12}>12 stories, 5 to 7 minutes</option><option value={16}>16 stories, 7 to 9 minutes</option></select></label>
               </div>
             </div>}
           <div className="delivery-settings">
@@ -486,13 +489,31 @@ export default function App() {
           {SHOW_SCHEDULE && <details className="schedule-settings">
             <summary><span><Clock3 size={15}/>Schedule delivery</span><ChevronDown size={15}/></summary>
             <div className="schedule-fields">
-              <label>Profile<select value={scheduleDraft.profile_id || profileId} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, profile_id: e.target.value }))}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
+              <label>What to deliver<select value={scheduleDraft.wildcard ? CUSTOM_SCHEDULE : scheduleDraft.profile_id || profileId} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => e.target.value === CUSTOM_SCHEDULE ? { ...v, wildcard: v.wildcard ?? { topics: [], expertise: 'intermediate', duration: 5, language: v.language } } : { ...v, profile_id: e.target.value, wildcard: null })}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}<option value={CUSTOM_SCHEDULE}>Custom briefing</option></select></label>
+              {scheduleDraft.wildcard && <>
+                <div className="schedule-topics"><span>Topics to follow</span>
+                  <div className="topic-pills">
+                    {topics.map(topic => {
+                      const chosen = scheduleDraft.wildcard!.topics;
+                      const selected = chosen.includes(topic);
+                      return <button key={topic} type="button" className={selected ? 'topic-pill chosen' : 'topic-pill'}
+                        aria-pressed={selected} disabled={loadingListenerSettings || (!selected && chosen.length >= MAX_TOPICS)}
+                        onClick={() => updateScheduleDraft(v => v.wildcard ? { ...v, wildcard: { ...v.wildcard, topics: selected ? v.wildcard.topics.filter(value => value !== topic) : [...v.wildcard.topics, topic] } } : v)}>
+                        {selected && <Check size={12} aria-hidden="true"/>}{topic}
+                      </button>;
+                    })}
+                  </div>
+                </div>
+                <label>Depth<select value={scheduleDraft.wildcard.expertise} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => v.wildcard ? { ...v, wildcard: { ...v.wildcard, expertise: e.target.value } } : v)}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
+                <label>Length<select value={scheduleDraft.wildcard.duration} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => v.wildcard ? { ...v, wildcard: { ...v.wildcard, duration: Number(e.target.value) } } : v)}><option value={3}>3 stories, 1 to 2 minutes</option><option value={5}>5 stories, 2 to 3 minutes</option><option value={8}>8 stories, 3 to 5 minutes</option><option value={12}>12 stories, 5 to 7 minutes</option><option value={16}>16 stories, 7 to 9 minutes</option></select></label>
+                {scheduleDraft.wildcard.topics.length === 0 && <p className="schedule-note">Choose at least one topic to schedule a custom briefing.</p>}
+              </>}
               <label>Cadence<select value={scheduleDraft.cadence} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, cadence: e.target.value as ScheduleDraft['cadence'] }))}><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
               {scheduleDraft.cadence === 'weekly' && <label>Weekday<select value={scheduleDraft.weekday ?? 0} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, weekday: Number(e.target.value) }))}>{['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>}
               <label>Local delivery time<input type="time" value={scheduleDraft.local_time} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, local_time: e.target.value }))}/></label>
               <label>Time zone (IANA)<input value={scheduleDraft.timezone} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, timezone: e.target.value }))} placeholder="Europe/Amsterdam" autoComplete="off"/></label>
-              <p className="schedule-note">Generation starts 30 minutes before delivery. Your audio appears at the selected time.</p>
-              <button className="retry-audio save-schedule" onClick={saveSchedule} disabled={scheduleBusy || preferencesLoading || loadingListenerSettings || !scheduleDraft.profile_id}>{scheduleBusy ? 'Saving schedule…' : schedule ? 'Save schedule changes' : 'Save delivery schedule'}</button>
+              <p className="schedule-note">Your briefing is prepared shortly before delivery and appears at the selected time.</p>
+              <button className="retry-audio save-schedule" onClick={saveSchedule} disabled={scheduleBusy || preferencesLoading || loadingListenerSettings || !(scheduleDraft.wildcard ? scheduleDraft.wildcard.topics.length : scheduleDraft.profile_id)}>{scheduleBusy ? 'Saving schedule…' : schedule ? 'Save schedule changes' : 'Save delivery schedule'}</button>
               {scheduleMessage && <p className="schedule-message" role="status">{scheduleMessage}</p>}
               {schedule && <><p className={/fail|error|unavailable/i.test(schedule.dispatch_status) ? 'schedule-message schedule-failed' : 'schedule-message'} role="status">Scheduler status: {schedule.dispatch_status.replace(/_/g, ' ')}</p><p className="next-delivery">Next delivery {new Date(schedule.delivery_at).toLocaleString([], { timeZone: schedule.timezone, dateStyle: 'medium', timeStyle: 'short' })} ({schedule.timezone})</p></>}
             </div>
@@ -615,7 +636,8 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         </button>}
     </div>
     {(audioError || failedPlayback) && <p className="action-error" role="alert">{audioError || 'Playback failed. Reload the audio or keep reading.'}</p>}
-    {ready && <section className="briefing-sources" aria-label="Sources used by this briefing"><div><h3 className="block-title">Sources used</h3><p>Reporting cited in this briefing.</p></div>{usedSources.length ? <div className="briefing-source-list">{usedSources.map(source => <a key={source.article_id} href={source.url} target="_blank" rel="noreferrer"><span>{source.source}</span><strong>{source.title}</strong></a>)}</div> : <p className="no-sources">No source links were attached to this briefing.</p>}</section>}
+    {ready && <details className="briefing-fold briefing-sources" aria-label="Sources used by this briefing"><summary><span><BookOpen size={15}/>Sources used<em>{usedSources.length}</em></span><ChevronDown size={15}/></summary><div className="briefing-fold-body"><p className="fold-note">Reporting cited in this briefing.</p>{usedSources.length ? <div className="briefing-source-list">{usedSources.map(source => <a key={source.article_id} href={source.url} target="_blank" rel="noreferrer"><span>{source.source}</span><strong>{source.title}</strong></a>)}</div> : <p className="no-sources">No source links were attached to this briefing.</p>}</div></details>}
+    {briefing.stories.length > 0 && <details className="briefing-fold briefing-review"><summary><span><ThumbsUp size={15}/>Review this briefing</span><ChevronDown size={15}/></summary><div className="briefing-fold-body"><p className="fold-note">Rate the stories you heard. Your next briefings lean towards the topics of stories you mark helpful and away from the topics of those you mark not useful.</p>{briefing.stories.map(story => <div className="story-feedback" key={story.id} aria-label={`Rate ${story.title}`}><span>{story.title}</span><button type="button" className={ratings[story.id] === 'up' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'up')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} useful`} aria-pressed={ratings[story.id] === 'up'}><ThumbsUp size={14}/> Helpful</button><button type="button" className={ratings[story.id] === 'down' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'down')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} not useful`} aria-pressed={ratings[story.id] === 'down'}><ThumbsDown size={14}/> Not useful</button></div>)}</div></details>}
     <div className="story-list">
       <div className="section-kicker"><span>In this briefing</span></div>
       {briefing.stories.map(story => {
@@ -628,7 +650,6 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
             <h3>{story.title}</h3>
             {story.source_title && <p className="translated-headline">Translated headline. Original: {story.source_title}</p>}
             <p>{story.reason}</p>
-            <div className="story-feedback" aria-label={`Rate ${story.title}`}><span>Was this useful?</span><button type="button" className={ratings[story.id] === 'up' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'up')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} useful`} aria-pressed={ratings[story.id] === 'up'}><ThumbsUp size={14}/> Helpful</button><button type="button" className={ratings[story.id] === 'down' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'down')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} not useful`} aria-pressed={ratings[story.id] === 'down'}><ThumbsDown size={14}/> Not useful</button></div>
             <div className="transcript">
               {segments.map(segment => <div className="transcript-segment" key={segment.id}>
                 {segment.refresher_text && <p className="transcript-refresher">{segment.refresher_text}</p>}

@@ -40,7 +40,8 @@ async function startServer(t, dataDirectory) {
   lines.on('line', line => {
     if (line.startsWith('SMOKE_PORT=')) origin = `http://127.0.0.1:${line.split('=')[1]}`;
   });
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // Up to a minute: on a busy machine the backend alone can take over ten seconds to import.
+  for (let attempt = 0; attempt < 600; attempt++) {
     if (spawnError || server.exitCode !== null) break;
     if (origin) {
       const response = await fetch(`${origin}/api/profiles`).catch(() => null);
@@ -251,7 +252,9 @@ test('built listener generates briefings, traces evidence, shows costs, and reco
   await page.getByLabel('Length').selectOption('5');
   const [customResponse] = await Promise.all([postResponse(page, '/api/briefings'), create.click()]);
   assert.equal(customResponse.status(), 201);
-  assert.deepEqual(customResponse.request().postDataJSON().wildcard.topics, [await topic.innerText()]);
+  // The chip is shown capitalised by CSS; the request carries the topic as the server names it (the DOM text).
+  assert.deepEqual(customResponse.request().postDataJSON().wildcard.topics, [(await topic.textContent()).trim()]);
+  assert.equal(await topic.evaluate(element => getComputedStyle(element).textTransform), 'capitalize');
   const custom = await customResponse.json();
   assert.notEqual(custom.id, briefing.id);
   assert.equal(custom.audio_status, 'ready');

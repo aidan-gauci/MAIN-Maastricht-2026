@@ -226,6 +226,28 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(self.client.get(self.listener_path("feedback")).json(), {"ratings": {story_id: "down"}})
         self.assertEqual(self.client.get(self.listener_path("feedback", self.other_listener)).json(), {"ratings": {}})
 
+    def test_without_n8n_a_live_server_keeps_the_schedule_itself(self):
+        # No webhook is configured: the server arms its own timer in live mode as it does in demo mode.
+        with patch.object(main, "MODE", "live"):
+            self.save()
+        schedule = self.store.schedule(self.listener)
+        self.assertEqual(schedule["dispatch_status"], "local")
+        main._arm_local_schedule.assert_called_once()
+        self.assertEqual(main._arm_local_schedule.call_args.args[0]["schedule_id"], schedule["schedule_id"])
+        with patch.object(main, "MODE", "live"), patch.object(main, "Timer") as timer, patch.object(main, "local_timers", {}) as timers:
+            self.arm_local_schedule(schedule)
+            self.assertIn(schedule["schedule_id"], timers)
+        timer.return_value.start.assert_called_once()
+
+    def test_a_wildcard_may_ask_for_twelve_stories_but_not_an_unlisted_length(self):
+        wildcard = {"topics": [self.stories[0]["topics"][0]], "expertise": "intermediate", "language": "en"}
+        with patch.object(service, "create_audio", side_effect=self.fake_audio):
+            longer = self.client.post("/api/briefings", json={"language": "en", "wildcard": {**wildcard, "duration": 12}})
+            unlisted = self.client.post("/api/briefings", json={"language": "en", "wildcard": {**wildcard, "duration": 9}})
+        self.assertEqual(longer.status_code, 201, longer.text)
+        self.assertLessEqual(len(longer.json()["stories"]), 12)
+        self.assertEqual(unlisted.status_code, 422)
+
     def test_explicit_geography_filters_story_groups_independently_of_language(self):
         fixture = self.store.path.parent / "regional.jsonl"
         articles = read_articles(DEMO / "articles.jsonl")
@@ -325,3 +347,59 @@ class DeliveryTest(unittest.TestCase):
         expected = {fact for segment in briefing["segments"] for fact in segment["fact_ids"]}
         now = service.iso_utc(self.clock.return_value)
         self.assertEqual(set(self.store.spoken_fact_ids(self.listener, now, now)), expected)
+
+    # A schedule delivers a saved profile or the listener's own selection of topics, depth and length.
+    def custom_schedule(self, **changes):
+        topics = self.client.get("/api/topics").json()[:2]
+        selection = {"topics": topics, "expertise": "advanced", "duration": 5, "language": "en", **changes}
+        return {**{key: value for key, value in self.settings.items() if key != "profile_id"}, "wildcard": selection}
+
+    def test_a_custom_schedule_saves_its_selection_and_delivers_it(self):
+        settings = self.custom_schedule()
+        response = self.client.put(self.listener_path("schedule"), json=settings)
+        self.assertEqual(response.status_code, 200, response.text)
+        schedule = response.json()["schedule"]
+        self.assertEqual(schedule["profile_id"], "")
+        self.assertEqual(schedule["wildcard"], settings["wildcard"])
+        self.assertEqual(self.client.get(self.listener_path("schedule")).json()["schedule"]["wildcard"], settings["wildcard"])
+        envelope = {field: schedule[field] for field in ENVELOPE_FIELDS}
+        self.clock.return_value = as_datetime(envelope["generation_at"])
+        with patch.object(service, "create_audio", side_effect=self.fake_audio):
+            self.run_interval(envelope, "completed")
+        self.clock.return_value = as_datetime(envelope["delivery_at"])
+        briefing, = self.client.get(self.listener_path("briefings")).json()
+        self.assertEqual(briefing["profile_name"], "Wildcard listener")
+        self.assertTrue(briefing["segments"])
+
+    def test_changing_the_selection_is_a_new_version_and_the_schedule_language_is_the_one_spoken(self):
+        first = self.client.put(self.listener_path("schedule"), json=self.custom_schedule()).json()["schedule"]
+        changed = self.custom_schedule(duration=8, language="en")
+        changed["language"] = "de"
+        second = self.client.put(self.listener_path("schedule"), json=changed)
+        self.assertEqual(second.status_code, 200, second.text)
+        second = second.json()["schedule"]
+        self.assertEqual(second["schedule_version"], first["schedule_version"] + 1)
+        self.assertEqual(second["wildcard"]["duration"], 8)
+        self.assertEqual(second["wildcard"]["language"], "de")
+        self.assertEqual(main._schedule_profile(self.store.schedule(self.listener))["language"], "de")
+
+    def test_a_schedule_needs_exactly_one_of_a_profile_and_a_selection(self):
+        both = {**self.settings, "wildcard": self.custom_schedule()["wildcard"]}
+        neither = {key: value for key, value in self.settings.items() if key != "profile_id"}
+        unknown = self.custom_schedule(topics=["a topic nobody prepared"])
+        for settings in (both, neither, unknown):
+            with self.subTest(settings=sorted(settings)):
+                self.assertEqual(self.client.put(self.listener_path("schedule"), json=settings).status_code, 422)
+        self.assertIsNone(self.client.get(self.listener_path("schedule")).json()["schedule"])
+
+    def test_a_profile_schedule_still_works_and_a_database_from_before_gains_the_column(self):
+        envelope = self.save()
+        schedule = self.client.get(self.listener_path("schedule")).json()["schedule"]
+        self.assertEqual(schedule["profile_id"], self.settings["profile_id"])
+        self.assertIsNone(schedule["wildcard"])
+        self.assertEqual(main._schedule_profile(self.store.schedule(self.listener))["id"], self.settings["profile_id"])
+        with self.store._connect() as db:
+            db.execute("ALTER TABLE schedules DROP COLUMN wildcard")
+        self.store.initialize()
+        self.assertIsNone(self.store.schedule(self.listener)["wildcard"])
+        self.assertEqual(envelope["schedule_id"], self.store.schedule(self.listener)["schedule_id"])

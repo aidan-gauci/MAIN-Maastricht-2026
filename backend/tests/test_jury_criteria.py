@@ -39,7 +39,9 @@ class NoInvestmentAdviceTest(unittest.TestCase):
                       "Implied Volatility Surging in Zorbo Options", "Options Traders Betting Big on Zorbo",
                       "How to Invest in Copper Miners Today", "A Guide to Solar Power ETFs", "Top Stock Reports: Zorbo and Quarx",
                       "GBP/CHF signal: forecast while the franc rallies", "Zorbo price prediction as momentum fades",
-                      "ZRB/QRX has printed a golden cross while the crown slides"):
+                      "ZRB/QRX has printed a golden cross while the crown slides",
+                      "Zorbo bulls lose their grip: could the price crash under 2 crowns?",
+                      "Silver edges up from a six-month low: what's next?", "Zorbo stalls under 40 crowns as bears keep control"):
             with self.subTest(title=title):
                 self.assertTrue(pipeline.is_investment_advice({"title": title}))
                 self.assertEqual(pipeline._trust_eligible(story("s", title)), (False, "investment advice, not news"))
@@ -48,7 +50,9 @@ class NoInvestmentAdviceTest(unittest.TestCase):
                       "Buyout firm to buy rival for 3 billion euros", "Why is Zorbo stock falling on Tuesday?",
                       "Buy now, pay later lender posts first profit", "Zorbo shares fall 5 percent as funds cut exposure",
                       "Zorbo stock jumps 13% as chipmaker raises annual forecast", "Bitcoin ETFs see record inflows",
-                      "Jobless claims hit 1971 lows as output surges", "Zorbo (ZRB) Beats Q2 Earnings Estimates"):
+                      "Jobless claims hit 1971 lows as output surges", "Zorbo (ZRB) Beats Q2 Earnings Estimates",
+                      "Coalition talks collapse: what's next?", "Central bank says growth will recover next year",
+                      "Rebels take control of the northern port"):
             with self.subTest(title=title):
                 self.assertFalse(pipeline.is_investment_advice({"title": title}))
                 self.assertEqual(len(pipeline.rank([story("s", title)], LISTENER)), 1)
@@ -68,6 +72,45 @@ class NoInvestmentAdviceTest(unittest.TestCase):
         self.assertEqual(spoken["fact_ids"], ["fact-s"])
         for word in ("Zacks", "target", "9 percent"):
             self.assertNotIn(word, spoken["text"])
+
+
+class DepthFollowsTheListenerTest(unittest.TestCase):
+    """A beginner hears a story's leading figures, an advanced listener more of them, all cited."""
+
+    NAMES = ("quarterly revenue", "operating profit", "net income", "order backlog", "free cash flow", "capital spending",
+             "research spending", "dividend payout", "share buyback")
+
+    def report(self):
+        report = story("depth", "Zorbo reports its quarter")
+        article_id = report["articles"][0]["article_id"]
+        report["facts"] = []
+        for n, name in enumerate(self.NAMES):
+            evidence = f"Zorbo said {name} was {n + 11} million crowns in the quarter."
+            report["facts"].append({"id": f"depth-{n}", "article_id": article_id, "evidence": evidence, "statement": evidence,
+                                    "measure": name, "value": str(n + 11), "unit": "million crowns", "language": "en",
+                                    "conflict_status": "supported"})
+        return report
+
+    def test_each_level_speaks_its_number_of_figures_and_a_deeper_level_extends_a_shallower_one(self):
+        spoken = {level: pipeline.narrate([self.report()], {**LISTENER, "expertise": level}, None)[0]
+                  for level in ("beginner", "intermediate", "advanced")}
+        self.assertEqual({level: len(segment["fact_ids"]) for level, segment in spoken.items()},
+                         {"beginner": 3, "intermediate": 5, "advanced": 7})
+        self.assertEqual(spoken["advanced"]["fact_ids"][:5], spoken["intermediate"]["fact_ids"])
+        self.assertEqual(spoken["intermediate"]["fact_ids"][:3], spoken["beginner"]["fact_ids"])
+        self.assertIn("Capital spending, 16 million crowns.", spoken["advanced"]["text"])
+        self.assertNotIn("Capital spending", spoken["intermediate"]["text"])
+
+    def test_prepared_summaries_keep_the_citations_of_every_level(self):
+        from backend.app.summaries import prepare_summaries, select_summaries
+        report = self.report()
+        summaries = prepare_summaries([report])
+        for level, count in (("beginner", 3), ("intermediate", 5), ("advanced", 7)):
+            with self.subTest(level=level):
+                self.assertEqual(len(summaries["depth"]["citations"]["en/" + level]["fact_ids"]), count)
+                segment, = select_summaries([report], {**LISTENER, "expertise": level}, summaries)
+                self.assertEqual(len(segment["fact_ids"]), count)
+                self.assertEqual(segment["text"].count(" million crowns."), count)
 
 
 class DisclosedVoiceTest(unittest.TestCase):

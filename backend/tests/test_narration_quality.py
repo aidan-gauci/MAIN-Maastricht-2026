@@ -99,11 +99,11 @@ class FixtureNarrationTest(unittest.TestCase):
                 self.assertIn(expected, sentences)
 
     def test_units_are_plural_complete_and_not_repeated(self):
-        # Four claims at most; the two conflicting job counts always make the cut.
+        # Five claims at the middle level; the two conflicting job counts always make the cut.
         factory = claims(self.narrate("a04-en"))
         self.assertEqual(factory, [
             "Jobs represented, 12,400.", "Applications, 310.", "Amount requested, 96 million crowns.",
-            "Jobs represented, 14,100.", "The reports give conflicting values.",
+            "Budget, 60 million crowns.", "Jobs represented, 14,100.", "The reports give conflicting values.",
         ])
         self.assertEqual(claims(self.narrate("a07-en")), ["Tourism receipts, 2.3 billion crowns.", "Overnight stays, 18.2 million."])
         self.assertEqual(claims(self.narrate("a06-en")), [
@@ -377,30 +377,35 @@ class ShortSpecificNarrationTest(unittest.TestCase):
         "The saving rate was 7.1%. Food prices were 3.8% higher."
     )
 
-    def test_a_story_reads_at_most_four_claims_and_cites_only_those(self):
+    def test_a_story_reads_only_as_many_claims_as_the_listeners_level_and_cites_only_those(self):
         story, segment = self.narrate(self.BODY)
         self.assertEqual(claims(segment), [
             "Revenue, 1 billion euros.", "Profit, 2 million euros.", "Inflation, 2.1 percent.", "Policy rate, 3.25 percent.",
+            "Saving rate, 7.1 percent.",
         ])
         spoken = {fact["value"] for fact in story["facts"] if fact["id"] in segment["fact_ids"]}
-        self.assertEqual(spoken, {"1", "2", "2.1", "3.25"})
+        self.assertEqual(spoken, {"1", "2", "2.1", "3.25", "7.1"})
         self.assertEqual(len(story["facts"]), 6)
+        _, beginner = self.narrate(self.BODY, expertise="beginner")
+        self.assertEqual(claims(beginner, expertise="beginner"), [
+            "Revenue, 1 billion euros.", "Profit, 2 million euros.", "Inflation, 2.1 percent.",
+        ])
 
-    def test_the_choice_of_claims_is_the_same_in_every_language_and_expertise(self):
+    def test_the_choice_of_claims_is_the_same_in_every_language_and_grows_with_the_level(self):
         story, = prepare([article("synthetic", "Briefing", self.BODY)], None)
-        cited = {
-            tuple(narrate([story], listener(language, expertise), None)[0]["fact_ids"])
-            for language in ("en", "de", "nl") for expertise in STYLES
-        }
-        self.assertEqual(len(cited), 1)
+        cited = {expertise: {tuple(narrate([story], listener(language, expertise), None)[0]["fact_ids"])
+                             for language in ("en", "de", "nl")} for expertise in STYLES}
+        self.assertEqual({expertise: len(choices) for expertise, choices in cited.items()}, dict.fromkeys(STYLES, 1))
+        beginner, intermediate, advanced = (set(next(iter(cited[level]))) for level in ("beginner", "intermediate", "advanced"))
+        self.assertTrue(beginner < intermediate < advanced)
 
     def test_named_figures_with_a_unit_come_before_bare_counts(self):
         _, segment = self.narrate(
             "The ministry said 12,400 manufacturing jobs were represented in applications. "
-            + self.BODY.split(" The saving rate")[0]
+            + self.BODY.split(" The saving rate")[0], expertise="beginner",
         )
         self.assertNotIn("Jobs represented", segment["text"])
-        self.assertEqual(len(claims(segment)), 4)
+        self.assertEqual(len(claims(segment, expertise="beginner")), 3)
 
     def test_conflicting_values_always_make_the_cut(self):
         first = article("first", "Inflation outlook", "Profit was 2 million euros. Revenue was 1 billion euros. "
@@ -409,9 +414,9 @@ class ShortSpecificNarrationTest(unittest.TestCase):
         second = article("second", "Inflation outlook", "Inflation was 2.9%.", url="https://wire.example/outlook")
         story, = prepare([first, second], None)
         self.assertTrue(story["conflicts"])
-        segment, = narrate([story], listener(), None)
-        sentences = claims(segment)
-        self.assertEqual(len(sentences), 5)
+        segment, = narrate([story], listener(expertise="beginner"), None)
+        sentences = claims(segment, expertise="beginner")
+        self.assertEqual(len(sentences), 4)     # three claims at this level, then the label
         self.assertEqual(sentences[-1], "The reports give conflicting values.")
         self.assertEqual(sum(sentence.startswith("Inflation") for sentence in sentences), 2)
 

@@ -82,8 +82,10 @@ def audit(store, articles, summaries=None) -> dict:
     for story_id, summary in (summaries or {}).items():
         for variants in summary["variants"].values():
             for version, text in variants.items():
-                # Each language cites its own facts: a figure is named in its article's language.
-                citations = summary.get("segments", {}).get(version.split("/")[0]) or summary["segment"]
+                # Each language and level cites its own facts: a figure is named in its article's language,
+                # and a deeper level speaks more of them.
+                citations = (summary.get("citations", {}).get(version)
+                             or summary.get("segments", {}).get(version.split("/")[0]) or summary["segment"])
                 cited = {_digits(_NUMBER.search(str(facts_by_id[fact_id]["value"])).group(0).lstrip("-−"))
                          for fact_id in citations.get("fact_ids", []) if fact_id in facts_by_id}
                 totals["narrations"] += 1

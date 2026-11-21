@@ -138,6 +138,10 @@ class Store:
                 db.execute("ALTER TABLE articles ADD COLUMN region TEXT")
             if "country" not in columns:
                 db.execute("ALTER TABLE articles ADD COLUMN country TEXT")
+            # A schedule for a listener's own selection keeps it here as JSON; profile_id is then empty.
+            schedule_columns = {row["name"] for row in db.execute("PRAGMA table_info(schedules)")}
+            if "wildcard" not in schedule_columns:
+                db.execute("ALTER TABLE schedules ADD COLUMN wildcard TEXT")
             run_columns = {row["name"] for row in db.execute("PRAGMA table_info(scheduled_runs)")}
             if "claim_token" not in run_columns:
                 db.execute("ALTER TABLE scheduled_runs ADD COLUMN claim_token TEXT")
@@ -282,13 +286,13 @@ class Store:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT schedule_id,schedule_version FROM schedules WHERE listener_id=?", (listener_id,)).fetchone()
-            values = {**values, "listener_id": listener_id,
+            values = {"wildcard": None, **values, "listener_id": listener_id,
                       "schedule_id": old["schedule_id"] if old else values["schedule_id"],
                       "schedule_version": old["schedule_version"] + 1 if old else 1,
                       "dispatch_status": "pending"}
-            db.execute("""INSERT INTO schedules(listener_id,schedule_id,schedule_version,profile_id,region,language,cadence,local_time,weekday,timezone,voice_preset,generation_at,delivery_at,dispatch_status)
-                VALUES(:listener_id,:schedule_id,:schedule_version,:profile_id,:region,:language,:cadence,:local_time,:weekday,:timezone,:voice_preset,:generation_at,:delivery_at,:dispatch_status)
-                ON CONFLICT(listener_id) DO UPDATE SET schedule_id=excluded.schedule_id,schedule_version=excluded.schedule_version,profile_id=excluded.profile_id,region=excluded.region,language=excluded.language,cadence=excluded.cadence,local_time=excluded.local_time,weekday=excluded.weekday,timezone=excluded.timezone,voice_preset=excluded.voice_preset,generation_at=excluded.generation_at,delivery_at=excluded.delivery_at,dispatch_status=excluded.dispatch_status""", values)
+            db.execute("""INSERT INTO schedules(listener_id,schedule_id,schedule_version,profile_id,wildcard,region,language,cadence,local_time,weekday,timezone,voice_preset,generation_at,delivery_at,dispatch_status)
+                VALUES(:listener_id,:schedule_id,:schedule_version,:profile_id,:wildcard,:region,:language,:cadence,:local_time,:weekday,:timezone,:voice_preset,:generation_at,:delivery_at,:dispatch_status)
+                ON CONFLICT(listener_id) DO UPDATE SET schedule_id=excluded.schedule_id,schedule_version=excluded.schedule_version,profile_id=excluded.profile_id,wildcard=excluded.wildcard,region=excluded.region,language=excluded.language,cadence=excluded.cadence,local_time=excluded.local_time,weekday=excluded.weekday,timezone=excluded.timezone,voice_preset=excluded.voice_preset,generation_at=excluded.generation_at,delivery_at=excluded.delivery_at,dispatch_status=excluded.dispatch_status""", values)
             return dict(db.execute("SELECT * FROM schedules WHERE listener_id=?", (listener_id,)).fetchone())
 
     def update_dispatch_status(self, schedule_id: str, version: int, status: str) -> None:

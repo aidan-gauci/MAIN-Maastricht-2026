@@ -20,7 +20,7 @@ if CORPUS not in {"fixture", "event"}:
 
 Expertise = Literal["beginner", "intermediate", "advanced"]
 Language = Literal["en", "de", "nl"]
-Duration = Literal[3, 5, 8]
+Duration = Literal[3, 5, 8, 12, 16]
 STYLES = {
     "beginner": "Explain technical terms and connect the story to everyday decisions",
     "intermediate": "Explain why each story matters and add context",
@@ -117,8 +117,10 @@ class BriefingRequest(BaseModel):
 
 
 class ScheduleRequest(BaseModel):
+    """A delivery schedule for a saved profile or for a listener's own selection (``wildcard``), never both."""
     model_config = ConfigDict(extra="forbid")
-    profile_id: str = Field(min_length=1)
+    profile_id: str | None = Field(default=None, min_length=1)
+    wildcard: Wildcard | None = None
     region: str = "all"
     language: Language
     cadence: Literal["daily", "weekly"]
@@ -150,6 +152,8 @@ class ScheduleRequest(BaseModel):
             raise ValueError("Daily schedules have no weekday and weekly schedules require one")
         if self.region not in REGIONS:
             raise ValueError("Choose all, Europe, or a configured country code")
+        if (self.profile_id is None) == (self.wildcard is None):
+            raise ValueError("Schedule a saved profile or a custom selection, not both")
         return self
 
 
