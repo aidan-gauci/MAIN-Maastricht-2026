@@ -218,6 +218,11 @@ class Providers:
                           estimated_usd=estimate if estimate is not None else self._usd(input_tokens=in_tokens, output_tokens=out_tokens))
         return response.choices[0].message.content or ""
 
+    def voice_id(self) -> str:
+        """The ElevenLabs voice this briefing uses (its preset, else the server default)."""
+        from .config import resolve_voice_id
+        return resolve_voice_id(self.voice_preset)
+
     def synthesize(self, text: str, output_path: str | Path, language: str = "en") -> None:
         """Create real audio through ElevenLabs. No placeholder audio is written."""
         if not self.live:
@@ -227,12 +232,7 @@ class Providers:
         api_key = os.getenv("ELEVENLABS_API_KEY")
         if not api_key:
             raise RuntimeError("ELEVENLABS_API_KEY is not configured")
-        from .config import configured_voice_presets
-        presets = configured_voice_presets()
-        preset = next((row for row in presets if row["id"] == self.voice_preset), None)
-        if preset is None:
-            preset = next(row for row in presets if row["id"] == "default")
-        voice_id = os.getenv(preset["voice_id_env"]) or os.getenv("ELEVENLABS_VOICE_ID")
+        voice_id = self.voice_id()
         if not voice_id:
             raise RuntimeError("ELEVENLABS_VOICE_ID is not configured")
         try:

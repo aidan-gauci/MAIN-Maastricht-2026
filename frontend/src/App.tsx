@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, Info, LoaderCircle, RotateCw, ShieldCheck, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
+import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, Info, LoaderCircle, Play, RotateCw, ShieldCheck, Square, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
 import { TracesView, type TraceFocus } from './traces';
 import { ThemeToggle } from './theme';
 import logoForLight from './assets/brand/maze-logo-for-light-mode.svg';
@@ -10,7 +10,7 @@ type Source = { article_id: string; title: string; source: string; url: string }
 type Story = { id: string; title: string; reason: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean };
 type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
-type VoicePreset = { id: string; label: string };
+type VoicePreset = { id: string; label: string; description?: string; preview?: boolean };
 type Schedule = { schedule_id: string; schedule_version: number; profile_id: string; region: string; language: string; cadence: 'daily' | 'weekly'; local_time: string; weekday: number | null; timezone: string; voice_preset: string; generation_at: string; delivery_at: string; dispatch_status: string };
 type ScheduleDraft = Omit<Schedule, 'schedule_id' | 'schedule_version' | 'generation_at' | 'delivery_at' | 'dispatch_status'>;
 type Fact = { id: string; statement: string; value: string; unit: string; evidence: string; article_id: string; conflict_status: string };
@@ -111,6 +111,28 @@ export default function App() {
   const [error, setError] = useState('');
   const [regions, setRegions] = useState<string[]>(['all']);
   const [voicePresets, setVoicePresets] = useState<VoicePreset[]>([{ id: 'default', label: 'Default voice' }]);
+  // A voice's own sample from ElevenLabs; playing it uses no credits.
+  const voiceSample = useRef<HTMLAudioElement | null>(null);
+  const [sampleState, setSampleState] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const [sampleError, setSampleError] = useState('');
+  function stopVoiceSample() {
+    voiceSample.current?.pause();
+    voiceSample.current = null;
+    setSampleState('idle');
+    setSampleError('');
+  }
+  function toggleVoiceSample() {
+    if (sampleState !== 'idle') { stopVoiceSample(); return; }
+    audio.current?.pause();
+    const sample = new Audio(`/api/voice-presets/${encodeURIComponent(scheduleDraft.voice_preset)}/preview`);
+    voiceSample.current = sample;
+    setSampleError('');
+    setSampleState('loading');
+    sample.onplaying = () => setSampleState('playing');
+    sample.onended = () => { voiceSample.current = null; setSampleState('idle'); };
+    sample.onerror = () => { voiceSample.current = null; setSampleState('idle'); setSampleError('The voice sample could not be played. You can still create a briefing with this voice.'); };
+    sample.play().catch(() => undefined);
+  }
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(defaultScheduleDraft);
   const scheduleDirtyRef = useRef(false);
@@ -433,9 +455,15 @@ export default function App() {
             <div className="delivery-heading"><h3>Delivery</h3><p>Choose how your briefing should be delivered.</p></div>
             <label>Output language<select value={language} disabled={loadingListenerSettings} onChange={e => { setLanguage(e.target.value); updateScheduleDraft(v => ({ ...v, language: e.target.value })); }}>{languages.map(value => <option key={value} value={value}>{languageNames.of(value) ?? value.toUpperCase()}</option>)}</select></label>
             {regions.length > 1 && <label>Region<select value={scheduleDraft.region} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, region: e.target.value }))}>{regions.map(value => <option key={value} value={value}>{regionLabel(value)}</option>)}</select></label>}
-            <label>Voice preset<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} onChange={e => updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value }))}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+            {voicePresets.length > 1 && <div className="voice-field">
+              <label>Voice<select value={scheduleDraft.voice_preset} disabled={loadingListenerSettings} aria-describedby="voice-style-note" onChange={e => { stopVoiceSample(); updateScheduleDraft(v => ({ ...v, voice_preset: e.target.value })); }}>{voicePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.description ? `${preset.label} (${preset.description})` : preset.label}</option>)}</select></label>
+              {voicePresets.find(preset => preset.id === scheduleDraft.voice_preset)?.preview && <button type="button" className="voice-sample" aria-pressed={sampleState !== 'idle'} onClick={toggleVoiceSample}>
+                {sampleState === 'loading' ? <><LoaderCircle className="spin" size={14} aria-hidden="true"/> Loading sample</> : sampleState === 'playing' ? <><Square size={13} aria-hidden="true"/> Stop sample</> : <><Play size={13} aria-hidden="true"/> Play sample</>}
+              </button>}
+              {sampleError && <p className="action-error" role="alert">{sampleError}</p>}
+            </div>}
             <label>Voice style<select value={expressiveness} aria-describedby="voice-style-note" onChange={e => { const value = e.target.value as Expressiveness; setExpressiveness(value); writeSetting(EXPRESSIVENESS_KEY, value); }}>{EXPRESSIVENESS.map(level => <option key={level.id} value={level.id}>{level.label}</option>)}</select></label>
-            <p className="microcopy" id="voice-style-note">Voice style applies to the next briefing you create. Change playback speed in the player at any time.</p>
+            <p className="microcopy" id="voice-style-note">Voice and voice style apply to the next briefing you create. Change playback speed in the player at any time.</p>
           </div>
           {SHOW_SCHEDULE && <details className="schedule-settings">
             <summary><span><Clock3 size={15}/>Schedule delivery</span><ChevronDown size={15}/></summary>

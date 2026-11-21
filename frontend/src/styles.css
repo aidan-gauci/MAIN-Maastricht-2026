@@ -405,6 +405,15 @@ select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .audio-controls { display: block; flex: 1 1 230px; width: 230px; max-width: min(100%, 360px); height: 42px; }
 .player-controls { display: flex; flex-direction: column; gap: 8px; flex: 1 1 230px; min-width: 0; max-width: min(100%, 360px); }
 .player-controls .audio-controls { width: 100%; max-width: none; flex: none; }
+.voice-field { display: grid; gap: 8px; }
+.voice-field > label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; color: var(--ink); }
+.voice-sample {
+  justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 12px;
+  border: 1px solid var(--line-control); border-radius: 999px; background: transparent; color: var(--accent);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.voice-sample:hover { background: var(--tint); }
+.voice-sample[aria-pressed="true"] { border-color: var(--accent); }
 .speed-control { display: flex; flex-wrap: wrap; gap: 6px; }
 .speed-option {
   min-width: 44px; min-height: 32px; padding: 4px 10px; border: 1px solid var(--line-control); border-radius: 999px;

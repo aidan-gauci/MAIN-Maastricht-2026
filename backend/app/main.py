@@ -10,6 +10,7 @@ from threading import Lock, Timer
 from typing import Literal
 from uuid import UUID, uuid4
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from weakref import WeakValueDictionary
 
@@ -21,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from . import pipeline
 from .audio import audio_file
 from .config import (CORPUS, DEMO, MODE, REGIONS, ROOT, BriefingRequest, ScheduleRequest,
-                     configured_voice_presets, load_profiles, supported_languages)
+                     configured_voice_presets, load_profiles, resolve_voice_id, supported_languages)
 from .importer import read_articles
 from .service import (NoRelevantStories, generate_briefing, get_store, iso_utc, list_topics,
                       local_delivery_date, next_occurrence, prepare_corpus, recommendation_topics, render_audio,
@@ -310,9 +311,52 @@ def regions():
     return [region for region in pipeline.corpus_regions(store.stories()) if region in REGIONS]
 
 
+def _previews_available():
+    return MODE == "live" and bool(os.getenv("ELEVENLABS_API_KEY"))
+
+
 @app.get("/api/voice-presets")
 def voice_presets():
-    return [{"id": row["id"], "label": row["label"]} for row in configured_voice_presets()]
+    preview = _previews_available()
+    return [{"id": row["id"], "label": row["label"], "description": row.get("description", ""), "preview": preview}
+            for row in configured_voice_presets()]
+
+
+_preview_locks: WeakValueDictionary = WeakValueDictionary()
+_preview_guard = Lock()
+
+
+@app.get("/api/voice-presets/{preset_id}/preview")
+def voice_preview(preset_id: str):
+    """ElevenLabs' own sample of a voice. Fetching it uses no credits; it is cached after the first play."""
+    if not _previews_available() or preset_id not in {row["id"] for row in configured_voice_presets()}:
+        raise HTTPException(404, "No preview for this voice")
+    voice_id = resolve_voice_id(preset_id)
+    if not re.fullmatch(r"[A-Za-z0-9]{10,40}", voice_id or ""):
+        raise HTTPException(404, "No preview for this voice")
+    target = store.audio_dir / "voice-previews" / f"{voice_id}.mp3"
+    with _preview_guard:
+        lock = _preview_locks.setdefault(voice_id, Lock())
+    with lock:
+        if not target.is_file():
+            try:
+                from elevenlabs import ElevenLabs
+                url = ElevenLabs(api_key=os.environ["ELEVENLABS_API_KEY"], timeout=10).voices.get(voice_id).preview_url
+                if not url or not url.startswith("https://"):
+                    raise ValueError("voice has no preview")
+                headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"]} if urlsplit(url).hostname.endswith("elevenlabs.io") else {}
+                with urlopen(Request(url, headers=headers), timeout=10) as response:
+                    data = response.read(5_000_000)
+                if len(data) < 1000:
+                    raise ValueError("preview too small")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                partial = target.with_suffix(".part")
+                partial.write_bytes(data)
+                partial.replace(target)
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Voice preview unavailable (%s)", type(exc).__name__)
+                raise HTTPException(502, "The voice sample could not be loaded") from exc
+    return FileResponse(target, media_type="audio/mpeg", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/api/evidence")

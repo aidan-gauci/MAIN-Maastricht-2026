@@ -162,10 +162,24 @@ REGIONS = COUNTRY_CODES | {"all", "Europe"}
 EUROPE_COUNTRIES = {"AD", "AL", "AT", "AX", "BA", "BE", "BG", "BY", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FO", "FR", "GB", "GG", "GI", "GR", "HR", "HU", "IE", "IM", "IS", "IT", "JE", "LI", "LT", "LU", "LV", "MC", "MD", "ME", "MK", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "RU", "SE", "SI", "SJ", "SK", "SM", "UA", "VA", "TR"}
 
 
+# ElevenLabs premade voices suited to reading news, chosen from this account's library. Premade voice
+# IDs are public and stable. They are offered only in live mode; demo mode uses the local system voice.
+VOICE_CATALOGUE = (
+    {"id": "daniel", "label": "Daniel", "description": "British, steady broadcaster", "voice_id": "onwK4e9ZLuTAKqWW03F9"},
+    {"id": "lily", "label": "Lily", "description": "British, warm and clear", "voice_id": "pFZP5JQG7iQjIQuC4Bku"},
+    {"id": "matilda", "label": "Matilda", "description": "American, knowledgeable and professional", "voice_id": "XrExE9yKIg1WjnnlVkGX"},
+    {"id": "eric", "label": "Eric", "description": "American, smooth and trustworthy", "voice_id": "cjVigY5qzO86Huf0OWal"},
+    {"id": "brian", "label": "Brian", "description": "American, deep and resonant", "voice_id": "nPczCjzI2devNBz1zQrb"},
+    {"id": "river", "label": "River", "description": "American, relaxed and neutral", "voice_id": "SAz9YHcvj6GT2YYXdXww"},
+)
+
+
 def configured_voice_presets():
     raw = os.getenv("BRIEFING_VOICE_PRESETS")
     if not raw:
-        return [{"id": "default", "label": "Default voice", "voice_id_env": "ELEVENLABS_VOICE_ID"}]
+        default = {"id": "default", "label": "Default voice", "description": "The voice set for this server",
+                   "voice_id_env": "ELEVENLABS_VOICE_ID"}
+        return [default, *(dict(row) for row in VOICE_CATALOGUE)] if MODE == "live" else [default]
     configured = json.loads(raw)
     if not isinstance(configured, dict) or "default" not in configured:
         raise ValueError("BRIEFING_VOICE_PRESETS must be an object containing a default preset")
@@ -174,6 +188,13 @@ def configured_voice_presets():
         for preset_id, value in configured.items()
         if isinstance(value, dict)
     ]
+
+
+def resolve_voice_id(preset_id):
+    """The ElevenLabs voice for a preset; unknown presets use the default voice."""
+    presets = configured_voice_presets()
+    preset = next((row for row in presets if row["id"] == preset_id), None) or next(row for row in presets if row["id"] == "default")
+    return preset.get("voice_id") or os.getenv(preset.get("voice_id_env", "ELEVENLABS_VOICE_ID"), "") or os.getenv("ELEVENLABS_VOICE_ID", "")
 
 
 def load_profiles():

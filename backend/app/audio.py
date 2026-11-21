@@ -128,12 +128,22 @@ def _assemble_audio(clips, output, ffmpeg):
         gap.unlink(missing_ok=True)
 
 
+def _voice_of(providers):
+    try:
+        voice = providers.voice_id()
+    except (AttributeError, TypeError):
+        voice = None
+    return voice if isinstance(voice, str) else os.getenv("ELEVENLABS_VOICE_ID", "")
+
+
 def create_audio(briefing, store, providers, mode):
     """Reuse synthesized segments and assemble a single file for the existing player."""
     extension = "mp3" if mode == "live" else "wav"
     language = briefing["language"]
     voice = (
-        os.getenv("ELEVENLABS_VOICE_ID", ""), os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
+        # The briefing's own voice, so briefings in different voices never share cached clips.
+        _voice_of(providers),
+        os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2"), "pauses-v1",
         sorted(voice_settings(getattr(providers, "expressiveness", "balanced")).items()),
     ) if mode == "live" else ("offline",)
     if not briefing["segments"]:
