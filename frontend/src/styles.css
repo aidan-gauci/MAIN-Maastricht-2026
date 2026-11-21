@@ -469,6 +469,14 @@ select:disabled, input:disabled { opacity: 0.6; cursor: not-allowed; }
 .transcript-segment > p { max-width: 62ch; font: 400 17px / 1.6 var(--serif); color: var(--text); }
 /* A figure recalled from an earlier briefing is spoken ahead of the story, so it reads ahead of it too. */
 .transcript-segment > p.transcript-refresher { margin-bottom: 4px; font-style: italic; color: var(--muted); }
+/* Listener memory: a figure or story this listener has heard in an earlier briefing */
+.heard-badge {
+  display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; padding: 1px 8px; vertical-align: 1px;
+  border: 1px solid var(--line-2); border-radius: 999px; background: var(--surface);
+  color: var(--text-2); font-size: 12px; font-style: normal; font-weight: 600; line-height: 1.5; white-space: nowrap;
+}
+.heard-badge svg { flex: none; }
+.memory-note, .heard-line { margin: 8px 0 0; font-size: 13px; line-height: 1.6; color: var(--text-2); }
 .conflict-flag {
   display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 1px 8px;
   border: 1px solid var(--warn-line); border-radius: 999px; background: var(--warn-bg);

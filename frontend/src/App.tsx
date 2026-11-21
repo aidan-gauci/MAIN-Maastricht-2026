@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, Info, Languages, Layers, LoaderCircle, Newspaper, Play, RotateCw, ShieldCheck, Square, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
+import { AudioLines, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Gauge, Headphones, History, Info, Languages, Layers, LoaderCircle, Newspaper, Play, RotateCw, ShieldCheck, Square, ThumbsDown, ThumbsUp, Waypoints, X } from 'lucide-react';
 import { TracesView, type TraceFocus } from './traces';
 import { count, eventSummary, eventThreads, hasMergeBadges, joinList, mergeInfo, shortDate, threadStats, type EventThread, type Merge } from './events';
 import { ThemeToggle } from './theme';
@@ -10,7 +10,7 @@ type Profile = { id: string; name: string; description: string; topic_weights?: 
 type Source = { article_id: string; title: string; source: string; url: string; language?: string };
 type Story = { id: string; title: string; reason: string; title_language?: string; source_title?: string };
 type Segment = { id: string; story_id?: string; text: string; fact_ids: string[]; sources: Source[]; conflict: boolean; refresher_text?: string; refresher_fact_ids?: string[] };
-type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number };
+type Briefing = { id: string; profile_name: string; language: string; stories: Story[]; segments: Segment[]; audio_url: string | null; audio_status: string; available_at?: string | null; estimated_seconds?: number; requested_minutes?: number; memory?: { heard_stories: number; heard_story_ids: string[] } };
 type VoicePreset = { id: string; label: string; description?: string; preview?: boolean; languages?: string[] | null };
 // Every voice speaks every output language; ElevenLabs has verified only some, and elsewhere the accent may vary.
 const englishLanguageName = (code: string) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) ?? code; } catch { return code; } };
@@ -640,6 +640,7 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
     {briefing.stories.length > 0 && <details className="briefing-fold briefing-review"><summary><span><ThumbsUp size={15}/>Review this briefing</span><ChevronDown size={15}/></summary><div className="briefing-fold-body"><p className="fold-note">Rate the stories you heard. Your next briefings lean towards the topics of stories you mark helpful and away from the topics of those you mark not useful.</p>{briefing.stories.map(story => <div className="story-feedback" key={story.id} aria-label={`Rate ${story.title}`}><span>{story.title}</span><button type="button" className={ratings[story.id] === 'up' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'up')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} useful`} aria-pressed={ratings[story.id] === 'up'}><ThumbsUp size={14}/> Helpful</button><button type="button" className={ratings[story.id] === 'down' ? 'feedback-button chosen' : 'feedback-button'} onClick={() => onRate(story.id, 'down')} disabled={busy || ratingBusy === story.id} aria-label={`Mark ${story.title} not useful`} aria-pressed={ratings[story.id] === 'down'}><ThumbsDown size={14}/> Not useful</button></div>)}</div></details>}
     <div className="story-list">
       <div className="section-kicker"><span>In this briefing</span></div>
+      {briefing.memory && briefing.memory.heard_stories > 0 && <p className="memory-note"><span className="heard-badge"><History size={12}/>Remembered</span>You have heard {briefing.memory.heard_stories} {briefing.memory.heard_stories === 1 ? 'story' : 'stories'} in the last seven days. They are not repeated here.</p>}
       {briefing.stories.map(story => {
         const storyEvidence = evidence.find(item => item.id === story.id);
         const segments = briefing.segments.filter(segment =>
@@ -648,11 +649,12 @@ function BriefingView({ briefing, headingRef, playing, audioRef, onPlaybackChang
         return <article className="story" key={story.id}>
           <div className="story-body">
             <h3>{story.title}</h3>
+            {briefing.memory?.heard_story_ids.includes(story.id) && <p className="heard-line"><span className="heard-badge"><History size={12}/>Heard before</span>Only the figures you have not heard are read.</p>}
             {story.source_title && <p className="translated-headline">Translated headline. Original: {story.source_title}</p>}
             <p>{story.reason}</p>
             <div className="transcript">
               {segments.map(segment => <div className="transcript-segment" key={segment.id}>
-                {segment.refresher_text && <p className="transcript-refresher">{segment.refresher_text}</p>}
+                {segment.refresher_text && <p className="transcript-refresher"><span className="heard-badge"><History size={12}/>Heard before</span>{segment.refresher_text}</p>}
                 <p>{segment.text}{segment.conflict && <span className="conflict-flag"><Info size={12}/> Conflicting reports</span>}</p>
                 {available && <div className="segment-actions">
                   <button className="source-toggle" aria-expanded={expanded === segment.id} onClick={() => onExpand(expanded === segment.id ? null : segment.id)}>

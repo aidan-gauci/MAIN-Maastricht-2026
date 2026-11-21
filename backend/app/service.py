@@ -335,6 +335,13 @@ def generate_briefing(store, profile, *, listener_id=None, region="all", voice_p
         audio_url=None,
         audio_status="pending",
     )
+    if spoken_fact_ids:
+        # What the listener's memory did to this briefing, for the "Heard before" badges in the transcript:
+        # how many stories they have already heard, and which of the stories played here continue one of those.
+        briefing["memory"] = {
+            "heard_stories": len(heard_stories),
+            "heard_story_ids": [story["id"] for story in briefing["stories"] if story["id"] in heard_stories],
+        }
     if persist:
         store.save_briefing(briefing)
     return render_audio(store, briefing, save=persist)
